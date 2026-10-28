@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "주 창과 작성 창의 기본 권한",
+  "windows": ["main", "compose-*", "message-*", "notify-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-set-title",
+    "core:window:allow-set-focus"
+  ]
+}

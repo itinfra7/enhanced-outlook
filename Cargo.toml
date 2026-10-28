@@ -1,0 +1,101 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/owa",
+  "crates/store",
+  "crates/mime",
+  "crates/search",
+  "crates/sync",
+  "crates/owa-cli",
+  "app/src-tauri",
+]
+
+[workspace.package]
+version = "1.0.6"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+authors = ["itinfra7 (https://github.com/itinfra7)"]
+publish = false
+
+[workspace.dependencies]
+eo-owa = { path = "crates/owa" }
+eo-store = { path = "crates/store" }
+eo-mime = { path = "crates/mime" }
+eo-search = { path = "crates/search" }
+eo-sync = { path = "crates/sync" }
+
+anyhow = "1"
+# 읽기 창 HTML 정화(계획서 9.2)
+ammonia = "4"
+base64 = "0.22"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+cookie_store = { version = "0.22", default-features = false }
+# HCL Domino 백업 HTML의 EUC-KR·ks_c_5601-1987 해석(mail-parser가 이미 쓰는 것과 같은 크레이트)
+encoding_rs = "0.8"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# OWA 전송: NTLM은 연결 단위 인증이라 HTTP/1.1 연결을 직접 관리한다(계획서 5.2)
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+# PST 가져오기(Microsoft 공개 파서)
+outlook-pst = "1.2.0"
+# OST 4K(HCL Traveler `.ims`) 압축 블록 풀기. zip과 같은 zlib-rs 백엔드.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+percent-encoding = "2"
+# 비밀번호 숨김 입력(owa-cli)
+rpassword = "7"
+# 로컬 DB(SQLite 번들 빌드, WAL)
+rusqlite = { version = "0.40", features = ["bundled"] }
+# TLS: rustls + ring(NASM·CMake 불필요), 루트 인증서는 Windows 인증서 저장소(platform verifier)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
+serde = { version = "1", features = ["derive"] }
+# EML 해석(본문·주소·첨부 이름), 한국어 문자셋(ks_c_5601-1987, euc-kr) 포함
+mail-parser = { version = "0.11", features = ["full_encoding"] }
+# 검색 색인(계획서 8장)
+tantivy = "0.26"
+unicode-normalization = "0.1"
+# preserve_order: WCF JSON 역직렬화기는 "__type"이 객체의 첫 키여야 한다
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+url = "2"
+# NTLM: Windows SSPI(브라우저와 같은 OS 구현)
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security_Authentication_Identity",
+  "Win32_Security_Credentials",
+  "Win32_System_Rpc",
+  # 앱 메모리 재기(--mem-test)
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }
+wiremock = "0.6"
+zeroize = "1"
+# 내보내기 ZIP(계획서 9.4). 압축은 순수 Rust zlib-rs만.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# 원문 압축(계획서 6.2: zstd 레벨 3)
+zstd = { version = "0.14", default-features = false }
+
+# 개발 빌드 크기 줄이기: 의존성 디버그 정보와 증분 캐시로 target\debug가 27GB까지 커져
+# D 드라이브가 가득 찼다(2026-10-16). 우리 크레이트는 줄 번호만, 의존성은 디버그 정보 없음.
+# 증분 캐시는 작은 파일을 많이 써서 V3 검사로 느리기도 하다.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

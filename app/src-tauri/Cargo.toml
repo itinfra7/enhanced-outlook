@@ -1,0 +1,46 @@
+[package]
+name = "enhanced-outlook"
+description = "Outlook 웹메일 전용 데스크톱 클라이언트 (Tauri 셸)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "enhanced_outlook_lib"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+eo-mime.workspace = true
+eo-owa.workspace = true
+eo-search.workspace = true
+eo-store.workspace = true
+eo-sync.workspace = true
+# tray-icon: 창을 닫아도 알림 영역에 남아 새 메일을 알린다(0.6.0)
+tauri = { version = "2", features = ["tray-icon"] }
+# 첨부 저장 대화상자(Rust 쪽에서만 호출)
+tauri-plugin-dialog = "2"
+# 외부 링크·첨부 열기(ShellExecute)
+tauri-plugin-opener = "2"
+# 한 번만 실행(두 프로세스가 같은 저장소·색인을 쓰지 않게)
+tauri-plugin-single-instance = "2"
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+# 앱 메모리 재기(--mem-test)
+windows-sys.workspace = true
+# 알림 영역으로 숨기면 WebView2에 메모리를 줄이라고 알린다(tauri가 쓰는 것과 같은 판)
+webview2-com = "0.39"
+windows-core = "0.62"
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "eo-search"
+description = "tantivy 색인, 한국어 바이그램 토크나이저, 질의 해석"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+# 합성 10만 통 말뭉치로 검색 성능·정확성 확인(계획서 8.4)
+name = "search-bench"
+path = "src/bin/search_bench.rs"
+
+[dependencies]
+tantivy.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

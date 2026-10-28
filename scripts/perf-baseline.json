@@ -1,0 +1,12 @@
+{
+  "note": "성능 회귀 한도(계획서 4.1-4 목표, 10장 4단계 결과). baseline은 2026-10-16 합성 10만 통 측정값. 첫 화면은 알려진 한계(4단계 사용자 결정)라 목표 300ms 대신 기준선의 1.5배를 한도로 둔다.",
+  "items": [
+    { "key": "firstPaint", "name": "첫 화면", "unit": "ms", "baseline": 2970, "max": 4500 },
+    { "key": "folderP95", "name": "폴더 전환 p95", "unit": "ms", "baseline": 38, "max": 50 },
+    { "key": "openMean", "name": "메일 열기 평균", "unit": "ms", "baseline": 38, "max": 100 },
+    { "key": "searchP95", "name": "검색 p95", "unit": "ms", "baseline": 34, "max": 100 },
+    { "key": "searchMax", "name": "검색 최대", "unit": "ms", "baseline": 49, "max": 1000 },
+    { "key": "scrollFps", "name": "스크롤", "unit": "fps", "baseline": 60, "min": 57 },
+    { "key": "scrollJankyPct", "name": "33ms 넘는 프레임", "unit": "%", "baseline": 0, "max": 1 }
+  ]
+}
