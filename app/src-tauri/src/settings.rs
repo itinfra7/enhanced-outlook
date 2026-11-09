@@ -239,18 +239,7 @@ pub struct SavedSort {
     pub reverse: bool,
 }
 
-fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> (T, Option<String>) {
-    match std::fs::read(path) {
-        Ok(bytes) => match serde_json::from_slice(&bytes) {
-            Ok(v) => (v, None),
-            Err(e) => (
-                T::default(),
-                Some(format!("{} 해석 실패, 기본값 사용: {e}", path.display())),
-            ),
-        },
-        Err(_) => (T::default(), None),
-    }
-}
+use crate::compat::read_json;
 
 /// 임시 파일에 쓴 뒤 바꿔 넣는다(쓰다 끊겨도 앞의 파일이 남는다).
 fn write_json<T: Serialize>(path: &Path, v: &T) -> std::io::Result<()> {
@@ -280,7 +269,11 @@ pub fn save_settings(root: &Path, s: &Settings) -> std::io::Result<()> {
 }
 
 pub fn load_ui_state(root: &Path) -> UiState {
-    read_json(&root.join("state.json")).0
+    let (s, warn) = read_json(&root.join("state.json"));
+    if let Some(w) = warn {
+        crate::applog::warn(w);
+    }
+    s
 }
 
 pub fn save_ui_state(root: &Path, s: &UiState) -> std::io::Result<()> {
@@ -469,6 +462,19 @@ mod tests {
                 percent: 90
             }
         );
+        // 모르는 값(다른 판이 쓴 알림 방식)이 있어도 주소·HCL Domino 설정은 잃지 않는다.
+        std::fs::write(
+            settings_path(dir.path()),
+            br#"{"outlookUrl":"https://mail.example.com","notify":"popup",
+                "domino":{"enabled":true,"portal":"https://portal.example.com","unified":true}}"#,
+        )
+        .unwrap();
+        let (s, warn) = load_settings(dir.path());
+        assert_eq!(s.outlook_url, "https://mail.example.com");
+        assert!(s.domino.enabled && s.domino.unified);
+        assert_eq!(s.notify, NotifyMode::Arrived);
+        assert!(warn.unwrap().contains("notify"));
+        assert!(dir.path().join("settings.json.bak").exists());
     }
 
     #[test]

@@ -10,8 +10,8 @@ use crate::state::AppState;
 
 type CmdResult<T> = Result<T, String>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Template {
     pub name: String,
     /// 넣을 내용(작성 화면 HTML).
@@ -22,11 +22,13 @@ fn path(root: &Path) -> PathBuf {
     root.join("templates.json")
 }
 
+/// 못 읽는 항목만 빼고 읽는다(통째로 비우면 다음 저장 때 템플릿이 모두 사라진다).
 pub fn load(root: &Path) -> Vec<Template> {
-    std::fs::read(path(root))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    let (list, warn) = crate::compat::read_json(&path(root));
+    if let Some(w) = warn {
+        crate::applog::warn(w);
+    }
+    list
 }
 
 pub fn save(root: &Path, list: &[Template]) -> std::io::Result<()> {

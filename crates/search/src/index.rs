@@ -131,6 +131,19 @@ fn truncate_utf8(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// 색인 폴더 안을 모두 지운다(폴더는 남긴다).
+fn clear_dir(dir: &Path) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)?.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            std::fs::remove_dir_all(&p)?;
+        } else {
+            std::fs::remove_file(&p)?;
+        }
+    }
+    Ok(())
+}
+
 impl SearchIndex {
     /// `dir`의 색인을 열거나 새로 만든다(계획서 6장 `index\`).
     pub fn open(dir: &Path) -> Result<Self> {
@@ -146,19 +159,22 @@ impl SearchIndex {
         let current = std::fs::read_to_string(&mark)
             .ok()
             .and_then(|s| s.trim().parse::<u32>().ok());
-        let stale = dir.exists() && current != Some(INDEX_FORMAT);
+        let mut stale = dir.exists() && current != Some(INDEX_FORMAT);
         if stale {
-            for e in std::fs::read_dir(dir)?.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    std::fs::remove_dir_all(&p)?;
-                } else {
-                    std::fs::remove_file(&p)?;
-                }
-            }
+            clear_dir(dir)?;
         }
-        let s = Self::open(dir)?;
-        if current != Some(INDEX_FORMAT) {
+        // 형식 표시는 같아도 열 수 없으면(tantivy 판이 바뀌어 세그먼트를 못 읽는 등) 비우고 새로 만든다.
+        // 색인은 DB·EML에서 언제든 다시 만들 수 있어 버려도 잃는 것이 없다(exe만 바꾼 업그레이드가 멈추지 않게).
+        let s = match Self::open(dir) {
+            Ok(s) => s,
+            Err(_) if !stale => {
+                stale = true;
+                clear_dir(dir)?;
+                Self::open(dir)?
+            }
+            Err(e) => return Err(e),
+        };
+        if stale || current != Some(INDEX_FORMAT) {
             std::fs::write(&mark, INDEX_FORMAT.to_string())?;
         }
         Ok((s, stale))
@@ -423,6 +439,30 @@ mod tests {
         let mut v = ix.search(q, &SearchOptions::default()).unwrap().ids;
         v.sort_unstable();
         v
+    }
+
+    /// 형식 표시가 맞아도 열 수 없는 색인(다른 tantivy 판 등)은 비우고 새로 만든다(exe만 바꾼 업그레이드).
+    #[test]
+    fn unreadable_index_is_rebuilt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index");
+        {
+            let (ix, rebuilt) = SearchIndex::open_checked(&path).unwrap();
+            assert!(!rebuilt, "처음 만들 때는 다시 색인할 것이 없다");
+            ix.add(&[doc(1, 10, 1_000, "보고서", "본문")]).unwrap();
+        }
+        assert!(
+            !SearchIndex::open_checked(&path).unwrap().1,
+            "그대로 열린다"
+        );
+        std::fs::write(path.join("meta.json"), b"{not tantivy").unwrap();
+        let (ix, rebuilt) = SearchIndex::open_checked(&path).unwrap();
+        assert!(rebuilt, "못 읽는 색인은 다시 만들고 다시 색인하게 알린다");
+        assert!(ids(&ix, "보고서").is_empty());
+        assert_eq!(
+            std::fs::read_to_string(path.join("format")).unwrap(),
+            INDEX_FORMAT.to_string()
+        );
     }
 
     /// 검색어로 시작하지 않아도 찾는다(0.7.0 사용자 요청): 영문·숫자 단어 중간, 한 글자 한글, 짧은 영문.
