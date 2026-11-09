@@ -232,7 +232,7 @@ pub fn open_app_window(app: &AppHandle, label: &str, title: &str) -> CmdResult<(
                 false
             });
     if let Some(args) = crate::memory::test_browser_args() {
-        builder = builder.additional_browser_args(args);
+        builder = builder.additional_browser_args(&args);
     }
     let window = builder.build().map_err(err)?;
     // 글자 크기(설정의 화면 확대).

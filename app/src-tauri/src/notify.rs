@@ -219,7 +219,7 @@ fn show(app: &AppHandle, payload: NotifyPayload) {
     close_all(app);
     let label = format!("{NOTIFY_LABEL}-{}", SEQ.fetch_add(1, Ordering::Relaxed) + 1);
     let root = app.state::<AppState>().root.clone();
-    let built = WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         app,
         &label,
         WebviewUrl::App(std::path::PathBuf::from("index.html")),
@@ -234,9 +234,12 @@ fn show(app: &AppHandle, payload: NotifyPayload) {
     .focused(false)
     // 알림 창이 내용을 그리고 높이를 알려 주면 자리를 잡아 보인다.
     .visible(false)
-    .data_directory(root.join("webview"))
-    .build();
-    if let Err(e) = built {
+    .data_directory(root.join("webview"));
+    // 같은 프로필을 쓰는 창은 브라우저 인자가 같아야 열린다.
+    if let Some(args) = crate::memory::test_browser_args() {
+        builder = builder.additional_browser_args(&args);
+    }
+    if let Err(e) = builder.build() {
         applog::warn(format!("알림 창을 만들지 못함: {e}"));
     }
 }

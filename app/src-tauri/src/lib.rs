@@ -13,6 +13,7 @@ mod activity;
 mod applog;
 mod cleanup;
 mod commands;
+mod compat;
 mod compose;
 mod domino;
 mod dupes;
@@ -355,7 +356,7 @@ pub fn run() {
                     .maximized(maximized);
             }
             if let Some(args) = memory::test_browser_args() {
-                builder = builder.additional_browser_args(args);
+                builder = builder.additional_browser_args(&args);
             }
             let window = builder
                 .data_directory(root.join("webview"))
