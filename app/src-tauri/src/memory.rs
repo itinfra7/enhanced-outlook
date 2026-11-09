@@ -159,12 +159,20 @@ pub fn set_low_memory(w: &tauri::WebviewWindow, low: bool) {
 /// `--mem-test`에서만 WebView2에 넘기는 인자: JS GC를 부를 수 있게(`window.gc`, 없으면 JS 힙이 GC 때마다 크게
 /// 오르내려 누수를 가리기 어렵다). 같은 프로필을 쓰는 창은 인자가 같아야 열리므로 앱 창을 만드는 곳마다 쓴다.
 /// 앞부분은 wry 기본값 그대로.
-pub fn test_browser_args() -> Option<&'static str> {
-    crate::commands::MEM_TEST
-        .load(std::sync::atomic::Ordering::Relaxed)
-        .then_some(
-            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --js-flags=--expose-gc",
-        )
+/// 개발용: 환경 변수 `EO_WEBVIEW_DEBUG_PORT`가 있으면 WebView2 원격 디버깅(127.0.0.1)을 연다.
+pub fn test_browser_args() -> Option<String> {
+    let mut extra = String::new();
+    if crate::commands::MEM_TEST.load(std::sync::atomic::Ordering::Relaxed) {
+        extra.push_str(" --js-flags=--expose-gc");
+    }
+    if let Some(port) = std::env::var("EO_WEBVIEW_DEBUG_PORT")
+        .ok()
+        .and_then(|p| p.trim().parse::<u16>().ok())
+    {
+        extra.push_str(&format!(" --remote-debugging-port={port}"));
+    }
+    (!extra.is_empty())
+        .then(|| format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection{extra}"))
 }
 
 /// `--mem-test` 전용: 주 창을 숨기거나(`hidden`) 최소화한 것처럼(`low`), 아니면 되돌린다. 창은 보이게 둔다.
