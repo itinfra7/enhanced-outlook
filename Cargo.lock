@@ -1170,7 +1170,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "enhanced-outlook"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "eo-mime",
  "eo-owa",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "eo-mime"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "ammonia",
  "base64 0.22.1",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "eo-owa"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "eo-search"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "tantivy",
  "tempfile",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "eo-store"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "rusqlite",
  "serde",
@@ -1278,7 +1278,7 @@ dependencies = [
 
 [[package]]
 name = "eo-sync"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -3150,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "owa-cli"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
