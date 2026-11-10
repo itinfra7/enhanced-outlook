@@ -242,11 +242,56 @@ pub fn open_app_window(app: &AppHandle, label: &str, title: &str) -> CmdResult<(
     Ok(())
 }
 
-/// 새 메일·회신·전달(`kind` new·reply·reply_all·forward)을 쓴다: 작성 중 메일을 만들고 임시 보관함에 행을
-/// 둔다. 작성 화면은 본문 영역(또는 메일 창)이 연다.
+/// "새로 작성"(`kind` copy, 1.1.0 사용자 요청): 메일 내용 그대로 새 메일을 만든다. 템플릿처럼 쓴다.
+/// 제목·본문(본문 그림 포함)·중요도·첨부를 가져오고 받는 사람은 비운다. 서명은 넣지 않는다(본문에 이미 있다).
+/// 첨부는 작성 중 메일의 파일로 두어 하나씩 뺄 수 있다. 작성 중 메일은 보통 새 메일(`new`)로 저장한다.
+fn compose_copy(st: &AppState, ref_id: Option<i64>) -> CmdResult<i64> {
+    let ref_id = ref_id.ok_or("원본 메일을 고르세요")?;
+    let row = st
+        .store
+        .message(ref_id)
+        .map_err(err)?
+        .ok_or("원본 메일이 없습니다")?;
+    let raw = st
+        .raw(ref_id, row.eml_hash.as_deref())
+        .ok_or("원문을 아직 받지 않았습니다. 잠시 뒤에 다시 해 주세요.")?;
+    let parts = compose::draft_parts(&raw).ok_or("원문을 읽을 수 없습니다")?;
+    let subject = if parts.subject.is_empty() {
+        row.props.subject.clone().unwrap_or_default()
+    } else {
+        parts.subject.clone()
+    };
+    let content = DraftContent {
+        subject,
+        body_html: parts.body_html.clone(),
+        include_quote: false,
+        options: DraftOptions {
+            importance: parts.importance,
+            plain_text: parts.plain_text,
+            ..DraftOptions::default()
+        },
+        ..DraftContent::default()
+    };
+    let id = st
+        .store
+        .create_draft("new", None, &content, now_ms())
+        .map_err(err)?;
+    for a in &parts.attachments {
+        let name = files::safe_file_name(&a.name);
+        st.store.add_draft_bytes(id, &name, &a.data).map_err(err)?;
+    }
+    Ok(id)
+}
+
+/// 새 메일·회신·전달·새로 작성(`kind` new·reply·reply_all·forward·copy)을 쓴다: 작성 중 메일을 만들고 임시
+/// 보관함에 행을 둔다. 작성 화면은 본문 영역(또는 메일 창)이 연다.
 #[tauri::command]
 pub async fn compose_new(app: AppHandle, kind: String, ref_id: Option<i64>) -> CmdResult<i64> {
     let (id, t) = blocking(&app, move |st| {
+        if kind == "copy" {
+            let id = compose_copy(st, ref_id)?;
+            return Ok((id, refresh_draft(st, id, false)));
+        }
         let mut content = prefill(st, &kind, ref_id)?;
         // 웹메일 설정의 서명을 자동으로 넣기로 했으면(새 메일·회신·전달 따로).
         if let Some(sig) = lock(&st.signature).clone()
@@ -408,6 +453,35 @@ pub struct FileView {
     pub size: u64,
 }
 
+/// 전달할 원본 첨부(작성 창에서 하나씩 뺄 수 있다, 1.1.0).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrigFileView {
+    /// "순번:이름"(이름이 같은 첨부도 가른다).
+    pub key: String,
+    pub name: String,
+    pub size: u64,
+    /// 뺐다(전달하지 않는다).
+    pub excluded: bool,
+}
+
+/// 원문의 일반 첨부와 뺀 여부.
+fn orig_files(o: &compose::Original, excluded: &[String]) -> Vec<OrigFileView> {
+    o.attachments
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let key = eo_store::orig_key(i, &a.name);
+            OrigFileView {
+                excluded: excluded.contains(&key),
+                key,
+                name: a.name.clone(),
+                size: a.data.len() as u64,
+            }
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DraftView {
@@ -424,8 +498,8 @@ pub struct DraftView {
     /// 고친 인용문(고친 적이 있으면, 저장할 때 작성 창의 인용문을 함께 저장한다).
     pub quote_html: Option<String>,
     pub attachments: Vec<FileView>,
-    /// 함께 전달되는 원본 첨부.
-    pub forward_attachments: Vec<FileView>,
+    /// 함께 전달되는 원본 첨부(뺀 것 포함, `excluded`).
+    pub forward_attachments: Vec<OrigFileView>,
     pub state: i64,
     pub last_error: Option<String>,
     pub max_bytes: i64,
@@ -497,14 +571,7 @@ pub async fn compose_load(app: AppHandle, draft_id: i64) -> CmdResult<DraftView>
                     ),
                 };
                 if d.kind == "forward" {
-                    forward_attachments = o
-                        .attachments
-                        .iter()
-                        .map(|a| FileView {
-                            name: a.name.clone(),
-                            size: a.data.len() as u64,
-                        })
-                        .collect();
+                    forward_attachments = orig_files(&o, &d.excluded_orig);
                 }
             }
         }
@@ -687,6 +754,39 @@ pub async fn compose_pick_files(app: AppHandle, draft_id: i64) -> CmdResult<Vec<
     .await
 }
 
+/// 전달할 원본 첨부를 빼거나(`excluded`) 되돌린다(1.1.0). 바뀐 원본 첨부 목록.
+#[tauri::command]
+pub async fn compose_exclude_original(
+    app: AppHandle,
+    draft_id: i64,
+    key: String,
+    excluded: bool,
+) -> CmdResult<Vec<OrigFileView>> {
+    let handle = app.clone();
+    blocking(&app, move |st| {
+        st.store
+            .set_orig_excluded(draft_id, &key, excluded, now_ms())
+            .map_err(err)?;
+        let t = refresh_draft(st, draft_id, false);
+        after_local(&handle, &t);
+        let d = st
+            .store
+            .draft(draft_id)
+            .map_err(err)?
+            .ok_or("작성 중 메일이 없습니다")?;
+        let Some(ref_id) = d.ref_message_id else {
+            return Ok(Vec::new());
+        };
+        let row = st.store.message(ref_id).map_err(err)?;
+        Ok(row
+            .and_then(|r| st.raw(ref_id, r.eml_hash.as_deref()))
+            .and_then(|raw| compose::original(&raw))
+            .map(|o| orig_files(&o, &d.excluded_orig))
+            .unwrap_or_default())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn compose_remove_file(
     app: AppHandle,
@@ -751,6 +851,18 @@ pub async fn compose_send(app: AppHandle, draft_id: i64, content: DraftSave) -> 
             && let Some(row) = st.store.message(ref_id).map_err(err)?
         {
             total += row.props.size.unwrap_or(0);
+            // 뺀 원본 첨부는 함께 가지 않는다.
+            if !d.excluded_orig.is_empty()
+                && let Some(o) = st
+                    .raw(ref_id, row.eml_hash.as_deref())
+                    .and_then(|raw| compose::original(&raw))
+            {
+                total -= orig_files(&o, &d.excluded_orig)
+                    .iter()
+                    .filter(|f| f.excluded)
+                    .map(|f| f.size as i64)
+                    .sum::<i64>();
+            }
         }
         let limit = max_bytes(st);
         if total > limit {

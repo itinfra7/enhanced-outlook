@@ -13,6 +13,7 @@ mod index;
 mod ops;
 mod ost;
 mod pst;
+mod redirects;
 mod send;
 
 pub use apply::{ApplyStats, ArchiveRecord, FolderChanges, MoveRecord, apply_cycle};
@@ -32,6 +33,9 @@ pub use index::{IndexReport, index_pending, reconcile_index};
 pub use ops::OpsReport;
 pub use ost::OstFile;
 pub use pst::PstItem;
+pub use redirects::{
+    RedirectCopy, RedirectScan, WINDOW_MS as REDIRECT_WINDOW_MS, find_redirect_copies,
+};
 pub use send::QUOTE_CID_BASE;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

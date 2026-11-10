@@ -172,6 +172,7 @@
         class:sel={picked}
         class:cur={i === selected}
         class:unread={r !== undefined && !r.read}
+        class:flagged={r !== undefined && r.flag === 1}
         style:transform="translateY({i * ROW_H}px)"
         data-index={i}
         role="option"
@@ -183,6 +184,7 @@
             <span class="who"
               >{@render marked((showTo ? r.to : r.from) || (showTo ? '(받는 사람 없음)' : '(보낸 사람 없음)'))}</span
             >
+            {#if r.pinned}<span class="pin" title="고정">📌</span>{/if}
             <span class="date">{listDate(r.date, today)}</span>
           </div>
           <div class="l2">
@@ -262,7 +264,17 @@
     background: var(--bg-hover);
   }
 
-  .row.sel {
+  /* 플래그 메일(웹메일처럼 옅은 노랑). 선택 색이 이긴다(아래). */
+  .row.flagged {
+    background: var(--bg-flag);
+  }
+
+  .row.flagged:hover {
+    background: var(--bg-flag-hover);
+  }
+
+  .row.sel,
+  .row.sel:hover {
     background: var(--bg-sel);
   }
 
@@ -314,6 +326,11 @@
     flex: none;
     font-size: 12px;
     color: var(--fg-muted);
+  }
+
+  .pin {
+    flex: none;
+    font-size: 11px;
   }
 
   .subj {

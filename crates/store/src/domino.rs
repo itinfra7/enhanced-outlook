@@ -67,6 +67,31 @@ fn item_row(r: &Row<'_>) -> rusqlite::Result<DominoItem> {
     })
 }
 
+/// 리다이렉트 사본 후보(HCL Domino 받은 메일·외부 메일, 1.1.0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedirectDomino {
+    pub message_id: i64,
+    pub unid: String,
+    pub noteid: String,
+    /// 메일함 열쇠(`XML_Inbox`·`XML_POP3`).
+    pub box_key: String,
+    pub subject: String,
+    pub from_addr: String,
+    pub from_name: String,
+    pub date: i64,
+    pub eml_hash: Option<String>,
+}
+
+/// 리다이렉트 사본과 견줄 Outlook 메일(읽기만).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedirectOutlook {
+    pub message_id: i64,
+    pub subject: String,
+    pub from_addr: String,
+    pub date: i64,
+    pub eml_hash: Option<String>,
+}
+
 /// 자동 정리 후보 판단용: 가져온 문서와 그 로컬 사본.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DominoCopy {
@@ -208,6 +233,65 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// 리다이렉트 사본 찾기(1.1.0)의 재료: HCL Domino 받은 메일·외부 메일에 있고 아직 서버에서 지우지 않은 메일과,
+    /// 그 받은 시각 앞뒤 `window_ms` 안의 Outlook 서버 메일(받은 메일이 있는 모든 폴더, 보관 포함. 보낸 편지함·
+    /// 임시 보관함·보낼 편지함 제외). 읽기만 한다.
+    pub fn redirect_rows(
+        &self,
+        window_ms: i64,
+    ) -> Result<(Vec<RedirectDomino>, Vec<RedirectOutlook>)> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT m.id, b.unid, b.noteid, f.box, COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), \
+               COALESCE(m.from_name, ''), m.date_received, m.eml_hash \
+             FROM domino_items b JOIN messages m ON m.id = b.message_id \
+             JOIN domino_folders f ON f.folder_id = m.folder_id \
+             WHERE b.server_deleted_at IS NULL AND f.box IN ('XML_Inbox', 'XML_POP3') \
+               AND m.origin = ?1",
+        )?;
+        let domino: Vec<RedirectDomino> = stmt
+            .query_map([DOMINO_SYNC_ORIGIN], |r| {
+                Ok(RedirectDomino {
+                    message_id: r.get(0)?,
+                    unid: r.get(1)?,
+                    noteid: r.get(2)?,
+                    box_key: r.get(3)?,
+                    subject: r.get(4)?,
+                    from_addr: r.get(5)?,
+                    from_name: r.get(6)?,
+                    date: r.get(7)?,
+                    eml_hash: r.get(8)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let (Some(lo), Some(hi)) = (
+            domino.iter().map(|d| d.date).min(),
+            domino.iter().map(|d| d.date).max(),
+        ) else {
+            return Ok((domino, Vec::new()));
+        };
+        let mut stmt = conn.prepare(
+            // 받은 메일만: 보낸 편지함·임시 보관함·보낼 편지함의 사본(본인에게 보낸 메일 등)은 짝이 아니다.
+            "SELECT m.id, COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), m.date_received, m.eml_hash \
+             FROM messages m JOIN folders f ON f.id = m.folder_id \
+             WHERE m.origin IS NULL AND m.is_draft = 0 \
+               AND COALESCE(f.well_known, '') NOT IN ('sentitems', 'drafts', 'outbox') \
+               AND m.date_received BETWEEN ?1 AND ?2",
+        )?;
+        let outlook: Vec<RedirectOutlook> = stmt
+            .query_map(params![lo - window_ms, hi + window_ms], |r| {
+                Ok(RedirectOutlook {
+                    message_id: r.get(0)?,
+                    subject: r.get(1)?,
+                    from_addr: r.get(2)?,
+                    date: r.get(3)?,
+                    eml_hash: r.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok((domino, outlook))
+    }
+
     /// 웹메일에 보낼 작업을 쌓는다. 읽음·★은 같은 메일의 앞 작업을 대신한다(마지막 상태만 보내면 된다).
     pub fn domino_enqueue(
         &self,
@@ -278,6 +362,19 @@ impl Store {
             params![id, error],
         )?;
         Ok(())
+    }
+
+    /// 서버·로컬에서 지운 문서의 남은 작업을 거둔다(리다이렉트 사본 삭제, 1.1.0).
+    pub fn domino_drop_ops(&self, unids: &[String], reason: &str) -> Result<()> {
+        self.transaction(|tx| {
+            for u in unids {
+                tx.tx.execute(
+                    "UPDATE domino_ops SET state = 2, last_error = ?2 WHERE unid = ?1 AND state = 0",
+                    params![u.to_ascii_uppercase(), reason],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     /// 보낼 작업이 남은 문서(서버 상태로 로컬을 덮어쓰지 않는다).

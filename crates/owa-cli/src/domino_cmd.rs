@@ -204,6 +204,7 @@ pub async fn run(
     max: Option<usize>,
     delete_test: Option<String>,
     action_test: Option<String>,
+    fields: &[String],
 ) -> Result<()> {
     let client = Domino::new(DominoConfig::new(portal)?);
     let username = crate::prompt::read_username_as("HCL Domino 아이디")?;
@@ -248,6 +249,17 @@ pub async fn run(
             limit.map_or("모름".to_owned(), |b| fmt_bytes(b as u64))
         ),
         Err(e) => println!("용량 확인 실패: {e}"),
+    }
+    if !fields.is_empty() {
+        for unid in fields {
+            let memo = client.memo(unid).await.context("메일 열기")?;
+            println!("==== {unid} · 필드 {}개", memo.fields.len());
+            for (name, value) in &memo.fields {
+                let v: String = value.chars().take(400).collect();
+                println!("{name} = {v}");
+            }
+        }
+        return Ok(());
     }
     let mut views: Vec<&str> = MAIL_VIEWS.iter().map(|(v, _)| *v).collect();
     views.push("XML_Unread");

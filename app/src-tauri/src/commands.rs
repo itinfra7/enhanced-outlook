@@ -146,6 +146,9 @@ pub struct Bootstrap {
     pub domino_enabled: bool,
     /// Outlook 웹메일 주소(비면 처음 실행: 주소부터 묻는다).
     pub outlook_url: String,
+    /// 로그인 창에 채울 아이디(지난번에 로그인한 것, 측정·점검은 없음).
+    pub remembered_user: Option<String>,
+    pub remembered_domino_user: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -244,6 +247,12 @@ pub async fn bootstrap(app: AppHandle, state: State<'_, AppState>) -> CmdResult<
             s.domino.enabled && !s.domino.portal.is_empty()
         },
         outlook_url: lock(&state.settings).outlook_url.clone(),
+        remembered_user: (!state.perf_test && !state.ui_test)
+            .then(|| lock(&state.ui).remembered_user.clone())
+            .flatten(),
+        remembered_domino_user: (!state.perf_test && !state.ui_test)
+            .then(|| lock(&state.ui).remembered_domino_user.clone())
+            .flatten(),
     })
 }
 
@@ -1011,6 +1020,47 @@ pub(crate) async fn refresh_user_config(app: AppHandle) -> bool {
     }
 }
 
+/// 앞 판에서 받아 둔 메일은 고정 여부를 모른다(1.1.0 전에는 받지 않았다): 로그인 뒤 한 번, 폴더마다 웹메일처럼
+/// 고정한 메일이 먼저 오게 찾아 표시한다. 이후 바뀐 것은 동기화가 받는다.
+const PIN_BACKFILL: &str = "backfill:pins-v1";
+
+async fn backfill_pins(app: AppHandle) {
+    let st = app.state::<AppState>();
+    if st.perf_test || st.ui_test || st.store.meta(PIN_BACKFILL).ok().flatten().is_some() {
+        return;
+    }
+    let Ok(folders) = st.store.syncable_folders() else {
+        return;
+    };
+    let mut found = Vec::new();
+    for f in folders {
+        let Some(sid) = f.server_id else { continue };
+        match st
+            .client()
+            .find_pinned(&eo_owa::FolderRef::Id(sid), 100)
+            .await
+        {
+            Ok(ids) => found.extend(ids),
+            Err(e) => {
+                applog::warn(format!("고정 메일 확인 실패({}): {e}", f.name));
+                return;
+            }
+        }
+    }
+    match st.store.pin_from_server(&found) {
+        Ok(t) => {
+            let _ = st.store.set_meta(PIN_BACKFILL, &now_ms().to_string());
+            applog::info(format!(
+                "고정 메일 확인: 서버 {}통, 새로 표시 {}통",
+                found.len(),
+                t.folders.values().map(Vec::len).sum::<usize>()
+            ));
+            crate::actions::after_local(&app, &t);
+        }
+        Err(e) => applog::warn(format!("고정 메일 표시 실패: {e}")),
+    }
+}
+
 /// 로그인(계획서 9.5). 아이디·비밀번호는 메모리에만 둔다. 실패하면 사유를 돌려준다.
 #[tauri::command]
 pub async fn login(
@@ -1064,6 +1114,7 @@ pub async fn login(
     crate::notify::reset(crate::notify::Source::Outlook);
     // 로그인 아이디가 주소 모양이면 나를 가리키는 주소다(대표 주소와 다를 수 있다, 1.0.5 사용자 지적).
     state.add_alias(&username);
+    remember_user(&state, false, Some(username.clone()));
     session.username = Some(username);
     start_engine(&app, &state, &mut session);
     update_status(&app, |s| {
@@ -1072,7 +1123,29 @@ pub async fn login(
         s.login_required = false;
     });
     tauri::async_runtime::spawn(refresh_user_config(app.clone()));
+    tauri::async_runtime::spawn(backfill_pins(app.clone()));
     Ok(())
+}
+
+/// 로그인 창에 채울 아이디(`state.json`, 비밀번호는 저장하지 않는다). `None`이면 잊는다.
+pub fn remember_user(st: &AppState, domino: bool, user: Option<String>) {
+    let mut ui = lock(&st.ui);
+    let slot = if domino {
+        &mut ui.remembered_domino_user
+    } else {
+        &mut ui.remembered_user
+    };
+    if *slot != user {
+        *slot = user;
+        st.ui_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// 로그인 창 아이디 칸의 ✕: 기억한 아이디를 지운다(다시 로그인할 때까지 기억하지 않는다).
+#[tauri::command]
+pub fn forget_user(state: State<'_, AppState>, domino: bool) {
+    remember_user(&state, domino, None);
 }
 
 /// 로그아웃: 메모리의 아이디·비밀번호와 세션을 지운다(로컬 메일은 유지).
@@ -1273,8 +1346,13 @@ pub async fn set_settings(app: AppHandle, settings: Settings) -> CmdResult<Setti
         if new.domino.enabled { "켬" } else { "끔" },
         if new.domino.enabled {
             format!(
-                "(받은 메일 자동 정리 {})",
-                cleanup_text(&new.domino.cleanup)
+                "(받은 메일 자동 정리 {}, 리다이렉트 사본 자동 삭제 {})",
+                cleanup_text(&new.domino.cleanup),
+                if new.domino.remove_redirects {
+                    "켬"
+                } else {
+                    "끔"
+                }
             )
         } else {
             String::new()

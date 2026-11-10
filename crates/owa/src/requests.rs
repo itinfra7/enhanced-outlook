@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::types::{Address, DeleteType, FileAttachment, FolderRef, ItemId, ReplyKind};
 use crate::{REQUEST_SERVER_VERSION, TIME_ZONE_ID};
 
-/// 목록용 속성 17개(계획서 5.4).
+/// 목록용 속성 18개(계획서 5.4). `RenewTime`은 웹메일의 고정(1.1.0, 실서버 확인: 고정한 메일만 4500-09-01이 온다).
 pub const LIST_PROPERTIES: &[&str] = &[
     "Subject",
     "DateTimeReceived",
@@ -28,7 +28,66 @@ pub const LIST_PROPERTIES: &[&str] = &[
     "Preview",
     "ItemLastModifiedTime",
     "IsDraft",
+    "RenewTime",
 ];
+
+/// 웹메일이 고정할 때 넣는 RenewTime(4500-09-01 0시 UTC, 웹메일 화면에는 09:00+09:00로 온다).
+pub const PIN_RENEW_TIME: &str = "4500-09-01T00:00:00Z";
+
+/// 고정·해제(1.1.0, 웹메일과 같은 방식): 고정은 RenewTime을 [`PIN_RENEW_TIME`]으로, 해제는 RenewTime을 지운다.
+pub fn update_pin(items: &[(ItemId, bool)]) -> Value {
+    json!({
+        "__type": "UpdateItemRequest:#Exchange",
+        "ItemChanges": items
+            .iter()
+            .map(|(id, pin)| {
+                let path = json!({ "__type": "PropertyUri:#Exchange", "FieldURI": "RenewTime" });
+                let update = if *pin {
+                    json!({
+                        "__type": "SetItemField:#Exchange",
+                        "Path": path,
+                        "Item": { "__type": "Message:#Exchange", "RenewTime": PIN_RENEW_TIME }
+                    })
+                } else {
+                    json!({ "__type": "DeleteItemField:#Exchange", "Path": path })
+                };
+                json!({
+                    "__type": "ItemChange:#Exchange",
+                    "ItemId": { "__type": "ItemId:#Exchange", "Id": id.id },
+                    "Updates": [update]
+                })
+            })
+            .collect::<Vec<_>>(),
+        "ConflictResolution": "AlwaysOverwrite",
+        "MessageDisposition": "SaveOnly",
+        "SendCalendarInvitationsOrCancellations": "SendToNone",
+        "SuppressReadReceipts": true,
+        "ClientSupportsIrm": true,
+        "OutboundCharset": "AutoDetect"
+    })
+}
+
+/// 고정한 메일 찾기(업그레이드 뒤 한 번, 1.1.0): 웹메일처럼 ReceivedOrRenewTime 내림차순이면 고정한 메일이 먼저 온다.
+pub fn find_pinned(folder: &FolderRef, max_entries: u32) -> Value {
+    json!({
+        "__type": "FindItemRequest:#Exchange",
+        "ItemShape": item_shape(&["RenewTime"]),
+        "ParentFolderIds": [folder_id(folder)],
+        "Traversal": "Shallow",
+        "Paging": {
+            "__type": "IndexedPageView:#Exchange",
+            "BasePoint": "Beginning",
+            "Offset": 0,
+            "MaxEntriesReturned": max_entries
+        },
+        "ViewFilter": "All",
+        "SortOrder": [{
+            "__type": "SortResults:#Exchange",
+            "Order": "Descending",
+            "Path": { "__type": "PropertyUri:#Exchange", "FieldURI": "ReceivedOrRenewTime" }
+        }]
+    })
+}
 
 /// `SyncFolderItems` 한 번에 받을 최대 변경 수(계획서 5.4).
 pub const MAX_CHANGES_RETURNED: u32 = 512;

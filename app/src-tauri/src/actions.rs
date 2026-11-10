@@ -141,6 +141,15 @@ pub async fn set_flag(app: AppHandle, ids: Vec<i64>, flag: i64) -> CmdResult<Act
     .await
 }
 
+/// 고정·해제(1.1.0). Outlook 메일은 웹메일의 고정과 같게 서버에도, HCL Domino 메일은 웹메일에 고정이 없어 로컬만.
+#[tauri::command]
+pub async fn set_pinned(app: AppHandle, ids: Vec<i64>, pinned: bool) -> CmdResult<ActionResult> {
+    run(app, move |s, now| {
+        Ok((s.mark_pinned(&ids, pinned, now)?, None))
+    })
+    .await
+}
+
 /// 이동. 같은 계정 안에서만(사용자 결정 2026-10-21).
 #[tauri::command]
 pub async fn move_messages(app: AppHandle, ids: Vec<i64>, to: i64) -> CmdResult<ActionResult> {

@@ -1,14 +1,16 @@
 <script lang="ts">
   // 로그인 창(계획서 9.5). 마지막 상태 위에 띄운다. "오프라인 사용"(또는 Esc)으로 닫으면 로그인 없이
   // 로컬 메일만 쓴다(보내기·동기화 같은 온라인 기능은 로그인할 때까지 숨김).
-  // 아이디·비밀번호는 저장하지 않는다: <form> 제출이 없어 WebView2 자동 완성에 남지 않고
+  // 비밀번호는 저장하지 않는다: <form> 제출이 없어 WebView2 자동 완성에 남지 않고
   // (자동 완성 기능도 꺼 둠), 비밀번호 칸은 시도할 때마다 비운다.
+  // 아이디는 로그인하면 앱이 기억한다(1.1.0, state.json). 아이디 칸의 ✕(onforget)로 지우면 다시 로그인할 때까지 비운다.
   // HCL Domino 계정 연동(0.5.0)도 같은 창을 쓴다(제목·아이디 이름·닫기 단추만 다르다).
   interface Props {
     username: string;
     reason: string;
     onlogin: (username: string, password: string) => Promise<string | null>;
     onoffline: () => void;
+    onforget?: () => void;
     title?: string;
     userLabel?: string;
     closeLabel?: string;
@@ -19,10 +21,23 @@
     reason,
     onlogin,
     onoffline,
+    onforget,
     title = 'Outlook 로그인',
     userLabel = '아이디',
     closeLabel = '오프라인 사용',
   }: Props = $props();
+
+  /** 받침이 있으면 `a`(사번을·사번은), 없으면 `b`(아이디를·아이디는). */
+  function josa(word: string, a: string, b: string): string {
+    const c = word.charCodeAt(word.length - 1) - 0xac00;
+    return c >= 0 && c < 11172 && c % 28 !== 0 ? a : b;
+  }
+
+  function forget() {
+    user = '';
+    onforget?.();
+    userInput?.focus();
+  }
 
   let user = $state('');
   let password = $state('');
@@ -40,9 +55,7 @@
   async function submit() {
     if (busy) return;
     if (!user.trim()) {
-      // 받침이 있으면 '을'(사번을), 없으면 '를'(아이디를).
-      const c = userLabel.charCodeAt(userLabel.length - 1) - 0xac00;
-      error = `${userLabel}${c >= 0 && c < 11172 && c % 28 !== 0 ? '을' : '를'} 입력하세요.`;
+      error = `${userLabel}${josa(userLabel, '을', '를')} 입력하세요.`;
       userInput.focus();
       return;
     }
@@ -81,14 +94,25 @@
     {#if reason}<p class="reason">{reason}</p>{/if}
     <label>
       <span>{userLabel}</span>
-      <input
-        bind:this={userInput}
-        bind:value={user}
-        name="outlook-user-nosave"
-        autocomplete="off"
-        spellcheck="false"
-        disabled={busy}
-      />
+      <span class="userbox">
+        <input
+          bind:this={userInput}
+          bind:value={user}
+          name="outlook-user-nosave"
+          autocomplete="off"
+          spellcheck="false"
+          disabled={busy}
+        />
+        {#if user && !busy}
+          <button
+            type="button"
+            class="clear"
+            title="{userLabel} 지우기(다시 로그인할 때까지 기억하지 않음)"
+            aria-label="{userLabel} 지우기"
+            onclick={forget}>✕</button
+          >
+        {/if}
+      </span>
     </label>
     <label>
       <span>비밀번호</span>
@@ -102,7 +126,7 @@
       />
     </label>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
-    <p class="note">{userLabel}·비밀번호는 저장하지 않습니다.</p>
+    <p class="note">비밀번호는 저장하지 않습니다. {userLabel}{josa(userLabel, '은', '는')} 로그인하면 기억합니다.</p>
     <div class="buttons">
       <button class="secondary" onclick={onoffline} disabled={busy}>{closeLabel}</button>
       <button class="primary" onclick={submit} disabled={busy}>{busy ? '연결 중…' : '로그인'}</button>
@@ -159,6 +183,37 @@
   input:focus {
     outline: 2px solid var(--accent);
     outline-offset: -1px;
+  }
+
+  .userbox {
+    position: relative;
+    display: grid;
+    font-size: inherit;
+    color: inherit;
+  }
+
+  .userbox input {
+    padding-right: 30px;
+  }
+
+  label .userbox .clear {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg-muted);
+    font-size: 12px;
+    line-height: 24px;
+  }
+
+  label .userbox .clear:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
   }
 
   .reason {

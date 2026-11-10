@@ -87,6 +87,9 @@
     },
   });
   let username = $state('');
+  /** 로그인 창에 채울 아이디(지난번에 로그인한 것, ✕로 지운다) */
+  let rememberedUser = $state('');
+  let rememberedDominoUser = $state('');
   let loginOpen = $state(false);
   /** Outlook 웹메일 주소(비면 처음 실행: 로그인 창 대신 주소부터 묻는다) */
   let outlookUrl = $state('');
@@ -535,6 +538,16 @@
 
   const markFlag = (flag: number) => act((ids) => api.setFlag(ids, flag), '플래그 바꿈', false);
 
+  /** 고정·해제(웹메일의 "고정"과 같다): 고른 메일 중 첫 메일이 고정이면 풀고, 아니면 고정한다. */
+  function togglePin() {
+    const ids = targets();
+    const r = ids.length ? model.row(model.indexOfId(ids[0])) : undefined;
+    void markPinned(!r?.pinned);
+  }
+
+  const markPinned = (pinned: boolean) =>
+    act((ids) => api.setPinned(ids, pinned), pinned ? '고정함' : '고정 해제', false);
+
   function deleteSelected() {
     const ids = targets();
     if (!ids.length) return;
@@ -601,6 +614,9 @@
         { label: '플래그 표시', shortcut: 'Insert', run: () => void markFlag(1) },
         { label: '완료로 표시', run: () => void markFlag(2) },
         { label: '플래그 지우기', run: () => void markFlag(0) },
+        row.pinned
+          ? { label: '고정 해제', run: () => void markPinned(false) }
+          : { label: '고정(맨 위에 두기)', run: () => void markPinned(true) },
         { separator: true, label: '' },
         { label: '이동…', shortcut: 'Ctrl+Shift+V', run: () => (picker = 'move') },
         { label: '복사…', run: () => (picker = 'copy') },
@@ -753,7 +769,7 @@
   }
 
   /** 새 메일·회신·전달. 회신·전달은 지금 연 메일(없으면 현재 행)로. */
-  async function compose(kind: 'new' | 'reply' | 'reply_all' | 'forward') {
+  async function compose(kind: 'new' | 'reply' | 'reply_all' | 'forward' | 'copy') {
     // 오프라인 사용(로그인 전)에는 보내기 같은 온라인 기능을 쓰지 않는다.
     if (!status.loggedIn) {
       toast('로그인하면 쓸 수 있습니다');
@@ -842,6 +858,7 @@
     try {
       await api.login(u, p);
       username = u;
+      rememberedUser = u;
       loginOpen = false;
       loginReason = '';
       // 로그인하면 받은 편지함에서(동기화가 바로 돌아 최신으로 채워진다).
@@ -857,6 +874,7 @@
   async function doDominoLogin(u: string, p: string): Promise<string | null> {
     try {
       await api.dominoLogin(u, p);
+      rememberedDominoUser = u;
       bnLoginOpen = false;
       bnReason = '';
       return null;
@@ -1061,6 +1079,8 @@
     folders = boot.folders;
     status = boot.status;
     username = boot.username ?? '';
+    rememberedUser = boot.rememberedUser ?? '';
+    rememberedDominoUser = boot.rememberedDominoUser ?? '';
     dominoEnabled = boot.dominoEnabled;
     outlookUrl = boot.outlookUrl;
     if (boot.first) await selectFolder(boot.first.folderId, boot.first.page);
@@ -1271,6 +1291,7 @@
       <button title="읽음으로 표시 (Ctrl+Q)" onclick={() => void markRead(true)}>읽음</button>
       <button title="안읽음으로 표시 (Ctrl+U)" onclick={() => void markRead(false)}>안읽음</button>
       <button title="플래그 (Insert)" onclick={toggleFlag}>⚑</button>
+      <button title="고정·고정 해제(목록 맨 위에 두기)" onclick={togglePin}>📌</button>
       <button title="이동 (Ctrl+Shift+V)" onclick={() => targets().length && (picker = 'move')}>이동</button>
       <button
         title={mode === 'folder' && folder?.wellKnown === 'deleteditems' ? '서버에서 삭제, 로컬 보관 (Del)' : '삭제 (Del)'}
@@ -1458,11 +1479,26 @@
     onoffline={() => (serverSetupOpen = false)}
   />
 {:else if loginOpen}
-  <LoginOverlay {username} reason={loginReason} title={loginTitle} onlogin={doLogin} onoffline={() => (loginOpen = false)} />
+  <LoginOverlay
+    username={username || rememberedUser}
+    reason={loginReason}
+    title={loginTitle}
+    onlogin={doLogin}
+    onoffline={() => (loginOpen = false)}
+    onforget={() => {
+      username = '';
+      rememberedUser = '';
+      void api.forgetUser(false);
+    }}
+  />
 {:else if bnLoginOpen}
   <LoginOverlay
-    username={status.domino.username ?? ''}
+    username={status.domino.username || rememberedDominoUser}
     reason={bnReason}
+    onforget={() => {
+      rememberedDominoUser = '';
+      void api.forgetUser(true);
+    }}
     onlogin={doDominoLogin}
     onoffline={() => (bnLoginOpen = false)}
     title="HCL Domino 로그인"

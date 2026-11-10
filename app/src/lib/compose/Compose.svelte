@@ -177,7 +177,7 @@
   let total = $derived(
     bodyHtml.length +
       files.reduce((n, f) => n + f.size, 0) +
-      (draft?.forwardAttachments ?? []).reduce((n, f) => n + f.size, 0),
+      (draft?.forwardAttachments ?? []).reduce((n, f) => n + (f.excluded ? 0 : f.size), 0),
   );
   let over = $derived(draft ? total > draft.maxBytes : false);
   let kindLabel = $derived(
@@ -372,6 +372,18 @@
         unsent = true;
         serverSaved = false;
       }
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
+
+  /** 전달할 원본 첨부를 빼거나 되돌린다. */
+  async function excludeOriginal(key: string, excluded: boolean) {
+    if (!draft) return;
+    try {
+      draft.forwardAttachments = await api.composeExcludeOriginal(draftId, key, excluded);
+      unsent = true;
+      serverSaved = false;
     } catch (e) {
       error = errorText(e);
     }
@@ -656,9 +668,24 @@
             <button aria-label="{f.name} 빼기" onclick={() => removeFile(f.name)}>✕</button>
           </span>
         {/each}
-        {#each draft.forwardAttachments as f (f.name)}
-          <span class="file fwd" title="원본 첨부(함께 전달)">
-            <span class="fname">{f.name}</span><span class="fsize">{bytes(f.size)} · 원본</span>
+        {#each draft.forwardAttachments as f (f.key)}
+          <span
+            class="file fwd"
+            class:excluded={f.excluded}
+            title={f.excluded ? '원본 첨부(빼서 전달하지 않음)' : '원본 첨부(함께 전달)'}
+          >
+            <span class="fname">{f.name}</span><span class="fsize"
+              >{bytes(f.size)} · {f.excluded ? '뺌' : '원본'}</span
+            >
+            {#if f.excluded}
+              <button
+                aria-label="{f.name} 다시 넣기"
+                title="다시 넣기"
+                onclick={() => excludeOriginal(f.key, false)}>↺</button
+              >
+            {:else}
+              <button aria-label="{f.name} 빼기" title="빼기" onclick={() => excludeOriginal(f.key, true)}>✕</button>
+            {/if}
           </span>
         {/each}
       </div>
@@ -860,8 +887,16 @@
   }
 
   .file.fwd {
-    padding-right: 8px;
     background: var(--bg-pane);
+  }
+
+  .file.fwd.excluded {
+    border-style: dashed;
+    opacity: 0.6;
+  }
+
+  .file.fwd.excluded .fname {
+    text-decoration: line-through;
   }
 
   .fname {

@@ -31,6 +31,11 @@ const FULL_MIN: Duration = Duration::from_secs(60);
 const CLEANUP_EVERY: Duration = Duration::from_secs(30 * 60);
 const CLEANUP_MAX: usize = 1000;
 
+/// 메일함 사용량만 바꾼다(지운 뒤 다시 잰 값).
+pub fn set_quota_used(app: &AppHandle, used: i64) {
+    update(app, |b| b.quota_used = Some(used));
+}
+
 fn update(app: &AppHandle, f: impl FnOnce(&mut DominoStatus)) {
     update_status(app, |s| f(&mut s.domino));
 }
@@ -93,6 +98,7 @@ pub async fn domino_login(app: AppHandle, username: String, password: String) ->
     ));
     // 주소 모양 아이디면 전체 회신에서 나로 뺀다.
     st.add_alias(&username);
+    crate::commands::remember_user(&st, true, Some(username.clone()));
     update(&app, |b| {
         b.connecting = false;
         b.logged_in = true;
@@ -677,7 +683,9 @@ async fn cycle(app: &AppHandle, full: bool, cancel: &AtomicBool) -> Result<(), e
             b.quota_limit = limit;
         }
     });
-    // 0.8.4까지 여기서 돌던 중복 전달 메일 자동 삭제는 0.9.0에서 뺐다(사용자 요청).
+    // 0.8.4까지 여기서 돌던 중복 전달 메일 자동 삭제는 0.9.0에서 뺐다(사용자 요청). 1.1.0에서 새로 설계해 다시 넣었다
+    // (`crate::redirects`, 설정에서 켤 때만). 알림보다 먼저: 지울 사본을 새 메일로 알리지 않게.
+    crate::redirects::maybe_remove(app).await;
     // 새 메일 알림·작업 표시줄 배지(0.6.0).
     crate::notify::check(app, crate::notify::Source::Domino);
     if report.imported > 0 || report.updated > 0 {

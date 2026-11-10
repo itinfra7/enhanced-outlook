@@ -86,6 +86,9 @@ fn guarded(row: &MessageRow, mut p: MessageProps, guard: &PendingGuard) -> Messa
     if guard.keep_flag.contains(&row.id) {
         p.flag = row.props.flag;
     }
+    if guard.keep_pin.contains(&row.id) {
+        p.pinned = None;
+    }
     p
 }
 

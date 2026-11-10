@@ -555,7 +555,9 @@ fn get_folder_accepts_distinguished_and_server_ids() {
 
 #[test]
 fn sync_folder_items_matches_plan_5_4() {
-    assert_eq!(LIST_PROPERTIES.len(), 17);
+    // 17개 + 고정(RenewTime, 1.1.0 실서버 확인).
+    assert_eq!(LIST_PROPERTIES.len(), 18);
+    assert_eq!(LIST_PROPERTIES.last(), Some(&"RenewTime"));
     check(
         requests::sync_folder_items(
             &FolderRef::Id("F1".into()),
