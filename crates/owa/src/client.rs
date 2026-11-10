@@ -419,6 +419,29 @@ impl Client {
         responses::parse_transfer("UpdateItem", &v)
     }
 
+    /// 고정·해제(1.1.0, 메일함 상태 변경). 최대 10건씩 부른다.
+    pub async fn set_pinned(
+        &self,
+        items: &[(ItemId, bool)],
+    ) -> Result<Vec<Result<Option<ItemId>, ItemError>>> {
+        let v = self.call("UpdateItem", requests::update_pin(items)).await?;
+        responses::parse_transfer("UpdateItem", &v)
+    }
+
+    /// 폴더에서 고정한 메일의 항목 ID(앞쪽 `max`통 안에서, 업그레이드 뒤 한 번).
+    pub async fn find_pinned(&self, folder: &FolderRef, max: u32) -> Result<Vec<String>> {
+        let v = self
+            .call("FindItem", requests::find_pinned(folder, max))
+            .await?;
+        let page = responses::parse_find_item(&v)?;
+        Ok(page
+            .items
+            .into_iter()
+            .take_while(|i| crate::is_pinned(i.renew_time.as_deref()))
+            .filter_map(|i| i.item_id.map(|id| id.id))
+            .collect())
+    }
+
     /// 항목의 지정한 속성(원문 없이).
     pub async fn get_items(
         &self,

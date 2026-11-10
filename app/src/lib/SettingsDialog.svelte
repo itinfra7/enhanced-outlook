@@ -5,7 +5,7 @@
   import { api, errorText } from './api';
   import Modal from './Modal.svelte';
   import RemoteAllowDialog from './RemoteAllowDialog.svelte';
-  import type { Cleanup, Settings, SettingsView } from './types';
+  import type { Cleanup, RedirectPreview, Settings, SettingsView } from './types';
   import { ZOOM_MAX, ZOOM_MIN, clampZoom } from './zoom';
 
   interface Props {
@@ -38,6 +38,7 @@
       portal: '',
       cleanup: { mode: 'off', days: 30, percent: 90 },
       unified: false,
+      removeRedirects: false,
     },
     notify: 'arrived',
     sheetPaste: 'ask',
@@ -57,6 +58,31 @@
   /** 지금 기준으로 서버에서 지울 받은 편지함(Outlook)·받은 메일(HCL Domino) 수(모르면 null) */
   let target = $state<number | null>(null);
   let bnTarget = $state<number | null>(null);
+  /** 리다이렉트 사본 자동 삭제를 켤 때 보여 주는 지울 사본 */
+  let redirects = $state<RedirectPreview | null>(null);
+  let redirectsError = $state('');
+  /** 이번에 켜는가(저장된 설정은 꺼져 있음) */
+  let enablingRedirects = $derived(
+    view !== null && draft.domino.enabled && draft.domino.removeRedirects && !view.settings.domino.removeRedirects,
+  );
+
+  $effect(() => {
+    if (!enablingRedirects) {
+      redirects = null;
+      return;
+    }
+    redirectsError = '';
+    api.dominoRedirectsPreview().then(
+      (p) => (redirects = p),
+      (e) => (redirectsError = errorText(e)),
+    );
+  });
+
+  function shortDate(ms: number): string {
+    const d = new Date(ms);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
 
   onMount(async () => {
     try {
@@ -116,6 +142,7 @@
         draft.zoom !== view.settings.zoom ||
         draft.domino.enabled !== view.settings.domino.enabled ||
         draft.domino.unified !== view.settings.domino.unified ||
+        draft.domino.removeRedirects !== view.settings.domino.removeRedirects ||
         draft.notify !== view.settings.notify ||
         draft.sheetPaste !== view.settings.sheetPaste ||
         cleanupChanged ||
@@ -145,6 +172,20 @@
     if (bn && !window.confirm(`HCL Domino 받은 메일 ${bn}통을 서버에서 삭제합니다.`)) {
       return;
     }
+    const enabling = enablingRedirects;
+    if (enabling) {
+      const p = await api.dominoRedirectsPreview().catch(() => redirects);
+      if (
+        p &&
+        p.count > 0 &&
+        !window.confirm(
+          `HCL Domino 리다이렉트 사본 ${p.count}통을 HCL Domino 서버와 로컬에서 완전히 삭제합니다(되돌릴 수 없음). ` +
+            'Outlook 메일은 그대로입니다. 앞으로 오는 사본도 자동으로 지웁니다.',
+        )
+      ) {
+        return;
+      }
+    }
     if (view && view.settings.outlookUrl && draft.outlookUrl.trim() !== view.settings.outlookUrl &&
       !window.confirm('Outlook 웹메일 주소를 바꾸면 다시 로그인합니다.')) {
       return;
@@ -153,6 +194,8 @@
     error = '';
     try {
       const saved = await api.setSettings(draft);
+      // 켜자마자 지우게 HCL Domino 확인을 바로 돌린다(로그인하지 않았으면 다음 로그인 뒤에).
+      if (enabling) void api.dominoSyncNow().catch(() => {});
       onsaved(
         saved.othersEverySecs !== draft.othersEverySecs
           ? `저장했습니다(나머지 폴더 ${span(saved.othersEverySecs)}로 맞춤)`
@@ -337,6 +380,40 @@
             </label>
             <h4>받은 메일 자동 정리</h4>
             {@render cleanupRows(draft.domino.cleanup, bnTarget, 'domino-cleanup')}
+            <h4>리다이렉트 사본 자동 삭제</h4>
+            <label class="row radio" data-remove-redirects>
+              <input type="checkbox" bind:checked={draft.domino.removeRedirects} />
+              Outlook에 온 메일이 HCL Domino에도 똑같이 온 사본을 HCL Domino 서버·로컬에서 완전 삭제
+            </label>
+            <p class="hint">
+              Outlook 메일은 지우지 않습니다. 제목·보낸 사람·받은 시각(2분 안)·본문·첨부가 모두 맞고 짝이 하나뿐인 메일만
+              지우며, 지우기 전에 Notes 안에서 보낸 메일이 아님을 서버에서 한 번 더 확인합니다.
+            </p>
+            {#if enablingRedirects}
+              {#if redirectsError}
+                <p class="error">{redirectsError}</p>
+              {:else if !redirects}
+                <p class="hint">지울 사본을 찾는 중…</p>
+              {:else}
+                <p class="info target" data-redirect-count>
+                  지금 지울 사본 {redirects.count}통{redirects.ambiguous
+                    ? ` · 짝이 여럿이라 남기는 메일 ${redirects.ambiguous}통`
+                    : ''}
+                </p>
+                {#if redirects.items.length}
+                  <ul class="redirects">
+                    {#each redirects.items as it, i (i)}
+                      <li>
+                        <span class="rd">{shortDate(it.date)}</span>
+                        <span class="rb">{it.mailbox}</span>
+                        <span class="rf">{it.from}</span>
+                        <span class="rs">{it.subject || '(제목 없음)'}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              {/if}
+            {/if}
           {/if}
         </section>
       {:else}
@@ -504,6 +581,50 @@
     margin: 4px 0;
     font-size: 12px;
     overflow-wrap: anywhere;
+  }
+
+  .hint {
+    margin: 2px 0 6px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+  }
+
+  /* 리다이렉트 사본 미리 보기 */
+  .redirects {
+    max-height: 170px;
+    margin: 4px 0 0;
+    padding: 4px 6px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    list-style: none;
+    font-size: 11.5px;
+  }
+
+  .redirects li {
+    display: flex;
+    gap: 8px;
+    white-space: nowrap;
+    line-height: 20px;
+  }
+
+  .redirects .rd,
+  .redirects .rb {
+    flex: none;
+    color: var(--fg-muted);
+  }
+
+  .redirects .rf {
+    flex: none;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .redirects .rs {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* 용량을 몰라 셀 수 없을 때도 줄 높이는 남긴다 */

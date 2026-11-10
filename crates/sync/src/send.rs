@@ -16,7 +16,7 @@ use std::path::Path;
 use eo_mime::compose::{self, ReplyMode};
 use eo_owa::requests::{DraftFields, NewMail, PROP_IN_REPLY_TO, PROP_REFERENCES, ReplyDraft};
 use eo_owa::{Address, FileAttachment, ItemId, ReplyKind};
-use eo_store::{Draft, MessageRow, Recipient, draft_state};
+use eo_store::{Draft, MessageRow, Recipient, draft_state, orig_key};
 
 use crate::engine::{Engine, Event, now_ms};
 use crate::ops::Outcome;
@@ -243,20 +243,26 @@ impl Engine {
                         }),
                 );
             }
-            // 새 메일로 만든 전달(원본이 서버에 없음)은 원본 첨부를 직접 붙인다.
+            // 새 메일로 만든 전달(원본이 서버에 없음)은 원본 첨부를 직접 붙인다(작성 창에서 뺀 것은 빼고, 1.1.0).
             if mode == Some(ReplyMode::Forward) && server_kind == Some(NEW_MAIL) {
-                uploads.extend(o.attachments.iter().enumerate().map(|(i, a)| {
-                    Upload::part(
-                        format!("orig:{i}:{}", a.name),
-                        FileAttachment {
-                            name: a.name.clone(),
-                            content_type: a.mime.clone(),
-                            content: a.data.clone(),
-                            is_inline: false,
-                            content_id: None,
-                        },
-                    )
-                }));
+                uploads.extend(
+                    o.attachments
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, a)| !d.excluded_orig.contains(&orig_key(*i, &a.name)))
+                        .map(|(i, a)| {
+                            Upload::part(
+                                format!("orig:{i}:{}", a.name),
+                                FileAttachment {
+                                    name: a.name.clone(),
+                                    content_type: a.mime.clone(),
+                                    content: a.data.clone(),
+                                    is_inline: false,
+                                    content_id: None,
+                                },
+                            )
+                        }),
+                );
             }
         }
         if !plain {
@@ -405,11 +411,14 @@ impl Engine {
             }
         };
 
-        // 첨부 맞추기: 뺀 것은 지우고 새 것만 올린다.
+        // 첨부 맞추기: 뺀 것은 지우고 새 것만 올린다. 서버 전달의 원본 첨부(`orig`로 시작하는 기록)는 서버가
+        // 넣은 것이라 아래 `sync_forward_originals`가 따로 맞춘다.
+        let server_forward = kind == "forward" && m.mode == Some(ReplyMode::Forward);
         let have = self.store().draft_uploads(d.id)?;
         let want: HashSet<&str> = m.uploads.iter().map(|u| u.key.as_str()).collect();
         let stale: Vec<(String, String)> = have
             .iter()
+            .filter(|(k, _)| !(server_forward && k.starts_with("orig")))
             .filter(|(k, _)| !want.contains(k.as_str()))
             .map(|(k, a)| (k.clone(), a.clone()))
             .collect();
@@ -455,7 +464,129 @@ impl Engine {
             }
             self.store().set_draft_upload(d.id, &u.key, Some(&aid.id))?;
         }
+        if server_forward {
+            self.sync_forward_originals(d, &m, &mut item).await?;
+        }
         Ok((item, kind, m.body))
+    }
+
+    /// 서버 전달(ForwardItem) 초안의 원본 첨부를 작성 창과 맞춘다(1.1.0): 뺀 원본 첨부는 서버 초안에서 지우고,
+    /// 뺐다가 되돌린 것은 로컬 원문에서 다시 올린다. 서버 첨부는 원본 첨부와 순서대로 이름으로 짝짓는다.
+    /// 기록: `orig:순번:이름` = 다시 올린 첨부 ID, `origdel:순번:이름` = 서버에서 지웠음(되돌리면 다시 올린다).
+    async fn sync_forward_originals(
+        &self,
+        d: &Draft,
+        m: &Material,
+        item: &mut ItemId,
+    ) -> Result<()> {
+        let Some(o) = &m.original else {
+            return Ok(());
+        };
+        let have = self.store().draft_uploads(d.id)?;
+        if d.excluded_orig.is_empty() && !have.keys().any(|k| k.starts_with("orig")) {
+            return Ok(());
+        }
+        let server = self
+            .client()
+            .get_items(std::slice::from_ref(item), &["Attachments"])
+            .await?
+            .into_iter()
+            .next()
+            .and_then(std::result::Result::ok)
+            .and_then(|i| i.attachments)
+            .unwrap_or_default();
+        // (이름, ID, 본문 그림)
+        let mut free: Vec<(String, String, bool)> = server
+            .into_iter()
+            .filter_map(|a| {
+                Some((
+                    a.name.unwrap_or_default(),
+                    a.attachment_id?.id,
+                    a.is_inline.unwrap_or(false),
+                ))
+            })
+            .collect();
+        let keys: Vec<String> = o
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(i, a)| orig_key(i, &a.name))
+            .collect();
+        // 1) 앱이 다시 올린 것은 기록한 ID로, 2) 나머지는 이름으로(일반 첨부 먼저).
+        let mut found: Vec<Option<String>> = vec![None; keys.len()];
+        for (i, key) in keys.iter().enumerate() {
+            if let Some(aid) = have.get(&format!("orig:{key}"))
+                && let Some(p) = free.iter().position(|(_, id, _)| id == aid)
+            {
+                found[i] = Some(free.remove(p).1);
+            }
+        }
+        for inline in [false, true] {
+            for (i, a) in o.attachments.iter().enumerate() {
+                if found[i].is_some() || have.contains_key(&format!("origdel:{}", keys[i])) {
+                    continue;
+                }
+                if let Some(p) = free
+                    .iter()
+                    .position(|(n, _, il)| *il == inline && n == &a.name)
+                {
+                    found[i] = Some(free.remove(p).1);
+                }
+            }
+        }
+        let mut drop: Vec<(usize, String)> = Vec::new();
+        for (i, key) in keys.iter().enumerate() {
+            let excluded = d.excluded_orig.contains(key);
+            match (&found[i], excluded) {
+                (Some(aid), true) => drop.push((i, aid.clone())),
+                (None, false) if have.contains_key(&format!("origdel:{key}")) => {
+                    let a = &o.attachments[i];
+                    let att = FileAttachment {
+                        name: a.name.clone(),
+                        content_type: a.mime.clone(),
+                        content: a.data.clone(),
+                        is_inline: false,
+                        content_id: None,
+                    };
+                    let (aid, _) = self.client().create_attachment(item, &att).await?;
+                    if let Some(ck) = aid.root_item_change_key.clone() {
+                        item.change_key = Some(ck);
+                    }
+                    self.store()
+                        .set_draft_upload(d.id, &format!("orig:{key}"), Some(&aid.id))?;
+                    self.store()
+                        .set_draft_upload(d.id, &format!("origdel:{key}"), None)?;
+                }
+                _ => {}
+            }
+        }
+        if !drop.is_empty() {
+            let ids: Vec<String> = drop.iter().map(|(_, a)| a.clone()).collect();
+            let results = self.client().delete_attachments(&ids).await?;
+            for ((i, _), r) in drop.iter().zip(results) {
+                match r {
+                    Ok(ck) => {
+                        if ck.is_some() {
+                            item.change_key = ck;
+                        }
+                    }
+                    Err(e) if e.code.contains("NotFound") => {}
+                    Err(e) => {
+                        return Err(Error::Owa(eo_owa::Error::Response {
+                            action: "DeleteAttachment".into(),
+                            code: e.code,
+                            message: e.message,
+                        }));
+                    }
+                }
+                let key = &keys[*i];
+                self.store()
+                    .set_draft_upload(d.id, &format!("orig:{key}"), None)?;
+                self.store()
+                    .set_draft_upload(d.id, &format!("origdel:{key}"), Some("-"))?;
+            }
+        }
+        Ok(())
     }
 
     /// 작성 중 메일을 서버 임시 보관함에 올린다(작업 큐 `draft_save`). 네트워크 오류는 `Err`(다시 시도),

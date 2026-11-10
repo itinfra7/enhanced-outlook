@@ -88,6 +88,13 @@ enum Command {
     },
     /// 메일함 용량
     Quota,
+    /// 고정(핀) 속성 확인(읽기만, 1.1.0): RenewTime·ReceivedOrRenewTime·0x0F01·0x0F02를 여러 꼴로 요청해 본다
+    Pins {
+        #[arg(default_value = "inbox")]
+        folder: String,
+        #[arg(long, default_value_t = 40)]
+        max: u32,
+    },
     /// 읽기 전용 실서버 점검: 로그인 → 계층 → 받은 편지함 증분 → 원문 1건
     Smoke,
     /// 1단계 읽기 전용 확인 전체 (로그인 1회)
@@ -137,6 +144,10 @@ enum Command {
         /// 읽음·안읽음, ☆ 켜기·끄기, 지운 메일로·되살리기 뒤 처음 상태로 둔다
         #[arg(long)]
         action_test: Option<String>,
+        /// 메일 문서의 숨은 필드를 모두 보인다(읽기만, UNID 여러 개는 쉼표로). 이미 읽은 메일로만
+        /// (문서를 열면 서버가 'new' 표시를 지운다)
+        #[arg(long, value_delimiter = ',')]
+        fields: Vec<String>,
     },
     /// 로컬 저장소·동기화 엔진(2단계)
     Store {
@@ -227,6 +238,17 @@ enum StoreCommand {
         /// 두 메일 원문의 다른 점만 보인다(글 해시·Date·Message-ID·링크)
         #[arg(long, num_args = 2)]
         diff: Option<Vec<i64>>,
+    },
+    /// HCL Domino 리다이렉트 사본 찾기(1.1.0, 로그인 없음, 지우지 않음): 짝 수·건너뛴 사유와 목록
+    Redirects {
+        /// 목록을 몇 통까지 보일지
+        #[arg(long, default_value_t = 200)]
+        show: usize,
+        /// (진단용) 이 메일들의 본문 글을 이 폴더에 `번호.txt`로 쓴다
+        #[arg(long, value_delimiter = ',')]
+        dump: Vec<i64>,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// OST 4K(HCL Traveler .ims) 읽기 확인(로그인 없음, 저장 안 함): 폴더별 통수·EML 만든 수·실패·도메인만
     Ims {
@@ -343,6 +365,7 @@ async fn run(cli: Cli) -> Result<()> {
         max,
         delete_test,
         action_test,
+        fields,
     } = &cli.command
     {
         return domino_cmd::run(
@@ -352,6 +375,7 @@ async fn run(cli: Cli) -> Result<()> {
             *max,
             delete_test.clone(),
             action_test.clone(),
+            fields,
         )
         .await;
     }
@@ -409,6 +433,51 @@ async fn run(cli: Cli) -> Result<()> {
             }
             StoreCommand::Dupes { show, diff } => {
                 return store_cmd::dupes(&root, *show, diff.as_ref().map(|d| (d[0], d[1])));
+            }
+            StoreCommand::Redirects { show, dump, out } => {
+                let store = eo_store::Store::open(&root)?;
+                if let Some(out) = out {
+                    for id in dump {
+                        let row = store.message(*id)?.context("메일 없음")?;
+                        let raw = store
+                            .eml()
+                            .get(row.eml_hash.as_deref().context("원문 없음")?)?;
+                        let x = eo_mime::extract(&raw).context("해석 실패")?;
+                        std::fs::write(
+                            out.join(format!("{id}.txt")),
+                            format!("{:?}\n----\n{}", x.attachment_names, x.body_text),
+                        )?;
+                    }
+                    return Ok(());
+                }
+                let t = Instant::now();
+                let s = eo_sync::find_redirect_copies(&store)?;
+                println!(
+                    "HCL Domino 받은·외부 메일 {}통: 리다이렉트 사본 {}통 · 짝 여럿 {} · 본문 다름 {} · 원문 없음 {} ({}ms)",
+                    s.scanned,
+                    s.copies.len(),
+                    s.ambiguous,
+                    s.body_differs,
+                    s.without_body,
+                    ms(t.elapsed())
+                );
+                for (d, o, sim, names) in s.differing.iter().take(*show) {
+                    println!("본문 다름: #{d} ↔ #{o} 비슷함 {sim:.3} 첨부 이름 같음 {names}");
+                }
+                for c in s.copies.iter().take(*show) {
+                    let o = store.message(c.outlook_message_id)?;
+                    println!(
+                        "#{} {:.3} {} {} | {} ↔ Outlook #{} {}",
+                        c.domino.message_id,
+                        c.similarity,
+                        c.domino.box_key,
+                        c.domino.from_addr,
+                        c.domino.subject.chars().take(40).collect::<String>(),
+                        c.outlook_message_id,
+                        o.map_or(0, |r| (r.props.date_received - c.domino.date) / 1000)
+                    );
+                }
+                return Ok(());
             }
             StoreCommand::Ims { path, limit } => return store_cmd::ims(path, *limit),
             StoreCommand::SampleBackup { out } => {
@@ -518,6 +587,86 @@ async fn run(cli: Cli) -> Result<()> {
                 println!("실패: {:?}", s.failures);
             }
         }
+        Command::Pins { folder, max } => {
+            let (folder, name) = resolve_folder(&client, &folder).await?;
+            let fid = eo_owa::requests::folder_id(&folder);
+            let ext = |tag: &str| {
+                serde_json::json!({
+                    "__type": "ExtendedPropertyUri:#Exchange",
+                    "PropertyTag": tag,
+                    "PropertyType": "SystemTime"
+                })
+            };
+            let uri =
+                |f: &str| serde_json::json!({ "__type": "PropertyUri:#Exchange", "FieldURI": f });
+            let variants: Vec<(&str, Vec<serde_json::Value>)> = vec![
+                ("FieldURI RenewTime", vec![uri("Subject"), uri("RenewTime")]),
+                (
+                    "FieldURI ReceivedOrRenewTime",
+                    vec![uri("Subject"), uri("ReceivedOrRenewTime")],
+                ),
+                (
+                    "Extended 0x0F01·0x0F02",
+                    vec![uri("Subject"), ext("0x0F01"), ext("0x0F02")],
+                ),
+            ];
+            println!("{name}: 최신 {max}통");
+            for (label, props) in variants {
+                let body = serde_json::json!({
+                    "__type": "FindItemRequest:#Exchange",
+                    "ItemShape": {
+                        "__type": "ItemResponseShape:#Exchange",
+                        "BaseShape": "IdOnly",
+                        "AdditionalProperties": props
+                    },
+                    "ParentFolderIds": [fid.clone()],
+                    "Traversal": "Shallow",
+                    "Paging": {
+                        "__type": "IndexedPageView:#Exchange",
+                        "BasePoint": "Beginning",
+                        "Offset": 0,
+                        "MaxEntriesReturned": max
+                    },
+                    "ViewFilter": "All",
+                    "SortOrder": [{
+                        "__type": "SortResults:#Exchange",
+                        "Order": "Descending",
+                        "Path": { "__type": "PropertyUri:#Exchange", "FieldURI": "DateTimeReceived" }
+                    }]
+                });
+                println!("== {label}");
+                match client.call("FindItem", body).await {
+                    Err(e) => println!("  오류: {e}"),
+                    Ok(v) => {
+                        let items = v
+                            .pointer("/Body/ResponseMessages/Items/0/RootFolder/Items")
+                            .and_then(|x| x.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if items.is_empty() {
+                            let s = v.to_string();
+                            println!("  항목 없음: {}", s.chars().take(600).collect::<String>());
+                        }
+                        for it in items {
+                            let subj: String = it
+                                .get("Subject")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .chars()
+                                .take(30)
+                                .collect();
+                            let mut extra = it.clone();
+                            if let Some(o) = extra.as_object_mut() {
+                                for k in ["__type", "ItemId", "Subject"] {
+                                    o.remove(k);
+                                }
+                            }
+                            println!("  {subj} | {extra}");
+                        }
+                    }
+                }
+            }
+        }
         Command::Quota => {
             let c = client.user_config().await?;
             let used = c.quota_used.unwrap_or(0).max(0) as u64;
@@ -606,6 +755,7 @@ async fn run(cli: Cli) -> Result<()> {
                 | StoreCommand::Images { .. }
                 | StoreCommand::Quality { .. }
                 | StoreCommand::Dupes { .. }
+                | StoreCommand::Redirects { .. }
                 | StoreCommand::Ims { .. }
                 | StoreCommand::SampleBackup { .. }
                 | StoreCommand::SampleDomino { .. }

@@ -464,6 +464,7 @@ pub(crate) fn props_from(s: &backup::Summary, size: usize, date_received: i64) -
         is_draft: false,
         item_class: Some("IPM.Note".into()),
         preview: opt(&s.preview),
+        pinned: None,
     }
 }
 

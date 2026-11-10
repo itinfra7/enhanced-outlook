@@ -70,7 +70,9 @@ pub struct DominoSettings {
     /// 함께 보여 주고, Outlook 폴더는 'Outlook 메일' 아래로 묶는다. 켜면 시작·로그인 때 통합 편지함을 연다.
     pub unified: bool,
     // 중복 전달 메일 자동 삭제(`dedupe_forwards`, 0.7.0~0.8.4)는 0.9.0에서 뺐다(사용자 요청). 예전 settings.json의
-    // 값은 읽을 때 무시한다.
+    // 값은 읽을 때 무시한다(이름을 다시 쓰지 않는다).
+    /// Outlook에서 리다이렉트되어 온 HCL Domino 사본을 서버·로컬에서 지운다(1.1.0, `crate::redirects`).
+    pub remove_redirects: bool,
 }
 
 /// 새 메일 알림 내용(사용자 요청 2026-10-21). 읽지 않은 메일 수(받은 편지함, 통합 편지함을 켰으면 통합 편지함)는 늘 보인다.
@@ -229,6 +231,10 @@ pub struct UiState {
     pub list_sort: Option<SavedSort>,
     /// 즐겨찾기 폴더(폴더 오른쪽 클릭 "즐겨찾기에 추가", 0.7.0).
     pub favorites: Vec<i64>,
+    /// 마지막으로 로그인한 아이디(1.1.0 사용자 요청). 로그인 창 아이디 칸의 ✕로 지우면 다시 로그인할 때까지 비운다.
+    /// 비밀번호는 저장하지 않는다.
+    pub remembered_user: Option<String>,
+    pub remembered_domino_user: Option<String>,
 }
 
 /// 저장한 목록 정렬(기준, 기본 방향을 뒤집을지).
@@ -325,6 +331,7 @@ mod tests {
                     percent: 0,
                 },
                 unified: true,
+                remove_redirects: true,
             },
             notify: NotifyMode::SenderSubject,
             sheet_paste: SheetPaste::Image,
@@ -503,6 +510,8 @@ mod tests {
                 reverse: true,
             }),
             favorites: vec![7, 3],
+            remembered_user: Some("user01".into()),
+            remembered_domino_user: None,
         };
         save_ui_state(dir.path(), &ui).unwrap();
         assert_eq!(load_ui_state(dir.path()), ui);

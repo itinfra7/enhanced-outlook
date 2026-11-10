@@ -231,6 +231,17 @@ DELETE FROM meta WHERE key = 'forward_after_id';
     r#"
 ALTER TABLE drafts ADD COLUMN quote_html TEXT;
 "#,
+    // 14: 전달할 때 뺀 원본 첨부(1.1.0 사용자 요청). JSON 배열, 항목은 "순번:이름"(`orig:` 올리기 키와 같은 꼴).
+    //     NULL이면 원본 첨부를 모두 전달한다.
+    r#"
+ALTER TABLE drafts ADD COLUMN excluded_orig TEXT;
+"#,
+    // 15: 메일 고정(1.1.0 사용자 요청, 웹메일의 "고정"과 같다: 서버 RenewTime 4500-09-01). 고정한 메일은 어느 정렬에서나
+    //     맨 위. 목록 기본 순서(고정 → 최신순)용 색인.
+    r#"
+ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX ix_msg_folder_pin_date ON messages(folder_id, pinned DESC, date_received DESC);
+"#,
 ];
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {

@@ -68,6 +68,14 @@ pub fn transient_login_error(e: &Error) -> bool {
     }
 }
 
+/// 고정한 메일인가(1.1.0): 웹메일은 고정할 때 RenewTime을 4500-09-01로 둔다(풀면 없앤다). 연도만 본다.
+pub fn is_pinned(renew_time: Option<&str>) -> bool {
+    renew_time
+        .and_then(|s| s.get(..4))
+        .and_then(|y| y.parse::<u32>().ok())
+        .is_some_and(|y| y >= 4000)
+}
+
 /// 모든 요청 머리에 넣는 서버 버전(계획서 5.1).
 pub const REQUEST_SERVER_VERSION: &str = "Exchange2016";
 
@@ -77,3 +85,33 @@ pub const TIME_ZONE_ID: &str = "Korea Standard Time";
 /// 기본 User-Agent: 최신 Chrome(계획서 5.1).
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36";
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    #[test]
+    fn pin_value_and_request() {
+        assert!(is_pinned(Some("4500-09-01T09:00:00+09:00")));
+        assert!(!is_pinned(Some("2026-11-10T09:43:06+09:00")));
+        assert!(!is_pinned(None));
+        let id = ItemId {
+            id: "AAA".into(),
+            change_key: Some("CK".into()),
+        };
+        let v = requests::update_pin(&[(id.clone(), true), (id, false)]);
+        let c = &v["ItemChanges"];
+        assert_eq!(c[0]["Updates"][0]["__type"], "SetItemField:#Exchange");
+        assert_eq!(
+            c[0]["Updates"][0]["Item"]["RenewTime"],
+            requests::PIN_RENEW_TIME
+        );
+        assert_eq!(c[1]["Updates"][0]["__type"], "DeleteItemField:#Exchange");
+        assert_eq!(c[1]["Updates"][0]["Path"]["FieldURI"], "RenewTime");
+        assert!(
+            c[0]["ItemId"].get("ChangeKey").is_none(),
+            "AlwaysOverwrite라 Id만"
+        );
+        assert!(requests::LIST_PROPERTIES.contains(&"RenewTime"));
+    }
+}

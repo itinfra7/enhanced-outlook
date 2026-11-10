@@ -297,6 +297,7 @@ pub fn synth(root: &Path, inbox: usize, others: usize, eml_count: usize) -> Resu
                 is_draft: false,
                 item_class: Some("IPM.Note".into()),
                 preview: Some(d.body.chars().take(120).collect()),
+                pinned: None,
             };
             let id = tx.insert_message(folder, &format!("SYN{i}"), None, &props)?;
             d.id = id as u64;

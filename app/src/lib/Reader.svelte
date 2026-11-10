@@ -22,7 +22,7 @@
     online: boolean;
     /** 검색 결과에서 연 메일이면 본문에서 칠할 검색어 */
     highlight?: string[];
-    oncompose: (kind: 'reply' | 'reply_all' | 'forward') => void;
+    oncompose: (kind: 'reply' | 'reply_all' | 'forward' | 'copy') => void;
   }
 
   let {
@@ -108,6 +108,11 @@
           <button class="mini" title="회신 (Ctrl+R)" onclick={() => oncompose('reply')}>↩ 회신</button>
           <button class="mini" title="전체 회신 (Ctrl+Shift+R)" onclick={() => oncompose('reply_all')}>↩↩ 전체 회신</button>
           <button class="mini" title="전달 (Ctrl+F)" onclick={() => oncompose('forward')}>↪ 전달</button>
+          <button
+            class="mini"
+            title="이 메일의 제목·본문·첨부로 새 메일 쓰기(받는 사람은 비움)"
+            onclick={() => oncompose('copy')}>✎ 새로 작성</button
+          >
         {/if}
         <button class="mini" title="인쇄 (Ctrl+P)" onclick={() => msg && printMessage(msg)}>인쇄</button>
       </div>

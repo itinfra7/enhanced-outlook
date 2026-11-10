@@ -62,6 +62,13 @@ pub struct Draft {
     pub send_started: bool,
     /// 서버 초안을 만든 방식(ComposeOperation: newMail·reply·replyAll·forward).
     pub server_kind: Option<String>,
+    /// 전달에서 뺀 원본 첨부("순번:이름", 1.1.0).
+    pub excluded_orig: Vec<String>,
+}
+
+/// 전달할 원본 첨부의 키("순번:이름"). 이름이 같은 첨부가 있어도 순번으로 가른다.
+pub fn orig_key(index: usize, name: &str) -> String {
+    format!("{index}:{name}")
 }
 
 /// 웹메일 작성 화면의 "기타 작업"·"메시지 옵션"(0.7.0).
@@ -107,9 +114,10 @@ pub struct DraftContent {
 const DRAFT_COLS: &str = "id, kind, ref_message_id, to_json, cc_json, bcc_json, subject, body_html, \
      include_quote, state, last_error, server_draft_id, created_at, updated_at, message_id, \
      importance, sensitivity, read_receipt, delivery_receipt, plain_text, server_dirty, send_started, \
-     server_kind, quote_html";
+     server_kind, quote_html, excluded_orig";
 
 fn draft_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Draft, [String; 3])> {
+    let excluded: Option<String> = r.get(24)?;
     Ok((
         Draft {
             id: r.get(0)?,
@@ -138,6 +146,9 @@ fn draft_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Draft, [String; 3])> {
             server_dirty: r.get(20)?,
             send_started: r.get(21)?,
             server_kind: r.get(22)?,
+            excluded_orig: excluded
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
         },
         [r.get(3)?, r.get(4)?, r.get(5)?],
     ))
@@ -398,6 +409,7 @@ impl Store {
                 is_draft: true,
                 item_class: Some("IPM.Note".into()),
                 preview: Some(preview.clone()),
+                pinned: None,
             };
             let mid = match existing {
                 Some(row) => {
@@ -635,6 +647,27 @@ impl Store {
             "UPDATE drafts SET updated_at = MAX(?1, updated_at + 1), server_dirty = 1 \
              WHERE id = ?2 AND state != ?3",
             params![now_ms, id, draft_state::OUTBOX],
+        )?;
+        Ok(())
+    }
+
+    /// 전달에서 뺄 원본 첨부를 바꾼다(`excluded`면 빼고, 아니면 되돌린다). 서버에 올릴 것으로 표시한다.
+    pub fn set_orig_excluded(&self, id: i64, key: &str, excluded: bool, now_ms: i64) -> Result<()> {
+        let Some(d) = self.draft(id)? else {
+            return Ok(());
+        };
+        let mut list = d.excluded_orig;
+        list.retain(|k| k != key);
+        if excluded {
+            list.push(key.to_owned());
+        }
+        let value = (!list.is_empty())
+            .then(|| serde_json::to_string(&list))
+            .transpose()?;
+        self.conn().execute(
+            "UPDATE drafts SET excluded_orig = ?1, updated_at = MAX(?2, updated_at + 1), server_dirty = 1 \
+             WHERE id = ?3 AND state != ?4",
+            params![value, now_ms, id, draft_state::OUTBOX],
         )?;
         Ok(())
     }

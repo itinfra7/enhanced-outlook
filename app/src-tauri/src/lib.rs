@@ -22,6 +22,7 @@ mod folders;
 mod import;
 mod memory;
 mod notify;
+mod redirects;
 mod settings;
 mod state;
 mod templates;
@@ -214,11 +215,13 @@ pub fn run() {
             commands::open_attachment,
             commands::login,
             commands::logout,
+            commands::forget_user,
             commands::sync_now,
             domino::domino_login,
             domino::domino_logout,
             domino::domino_sync_now,
             domino::domino_cleanup_preview,
+            redirects::domino_redirects_preview,
             notify::notify_payload,
             notify::notify_ready,
             notify::notify_close,
@@ -238,6 +241,7 @@ pub fn run() {
             commands::set_last_folder,
             actions::mark_read,
             actions::set_flag,
+            actions::set_pinned,
             actions::move_messages,
             actions::copy_messages,
             actions::delete_messages,
@@ -287,6 +291,7 @@ pub fn run() {
             compose::compose_add_files,
             compose::compose_pick_files,
             compose::compose_remove_file,
+            compose::compose_exclude_original,
             compose::compose_send,
             compose::compose_discard,
             compose::contacts_local,

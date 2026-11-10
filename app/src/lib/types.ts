@@ -38,6 +38,8 @@ export interface RowView {
   origin: string | null;
   /** 임시 보관함에서 쓰던 메일: 0 작성 중, 1 보내는 중, 2 발송 실패 */
   draft: number | null;
+  /** 고정(목록 맨 위) */
+  pinned: boolean;
 }
 
 export interface Page {
@@ -219,6 +221,15 @@ export interface FileView {
   size: number;
 }
 
+/** 전달할 원본 첨부(작성 창에서 하나씩 뺄 수 있다) */
+export interface OrigFileView {
+  /** "순번:이름" */
+  key: string;
+  name: string;
+  size: number;
+  excluded: boolean;
+}
+
 /** 작성 창(6단계) */
 export interface DraftView {
   id: number;
@@ -234,7 +245,8 @@ export interface DraftView {
   /** 고친 인용문(고친 적이 있으면) */
   quoteHtml: string | null;
   attachments: FileView[];
-  forwardAttachments: FileView[];
+  /** 전달할 원본 첨부(뺀 것은 excluded) */
+  forwardAttachments: OrigFileView[];
   /** 0 작성 중, 1 보낼 편지함, 2 발송 실패 */
   state: number;
   lastError: string | null;
@@ -341,6 +353,9 @@ export interface Bootstrap {
   dominoEnabled: boolean;
   /** Outlook 웹메일 주소(비면 처음 실행) */
   outlookUrl: string;
+  /** 로그인 창에 채울 아이디(지난번에 로그인한 것) */
+  rememberedUser: string | null;
+  rememberedDominoUser: string | null;
 }
 
 /** 메일 목록 정렬 기준. reverse면 기준의 기본 방향(날짜는 최신순 등)을 뒤집는다. */
@@ -384,6 +399,16 @@ export interface DominoSettings {
   cleanup: Cleanup;
   /** 통합 편지함(Outlook 받은 편지함 + HCL Domino 받은 메일·외부 메일), Outlook 폴더는 'Outlook 메일'로 묶음 */
   unified: boolean;
+  /** Outlook에서 리다이렉트되어 온 HCL Domino 사본을 서버·로컬에서 지운다(Outlook 메일은 그대로) */
+  removeRedirects: boolean;
+}
+
+/** 리다이렉트 사본 미리 보기 */
+export interface RedirectPreview {
+  count: number;
+  items: { subject: string; from: string; date: number; mailbox: string }[];
+  /** 짝 후보가 여럿이라 남기는 수 */
+  ambiguous: number;
 }
 
 /** 도구 → 중복 메일의 메일 한 통 */

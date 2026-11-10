@@ -22,9 +22,13 @@ use std::sync::{Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 pub use activity::ActivityOp;
-pub use domino::{DOMINO_SYNC_ORIGIN, DominoCopy, DominoItem, DominoOp, domino_op};
+pub use domino::{
+    DOMINO_SYNC_ORIGIN, DominoCopy, DominoItem, DominoOp, RedirectDomino, RedirectOutlook,
+    domino_op,
+};
 pub use drafts::{
-    Draft, DraftContent, DraftLink, DraftOptions, Recipient, draft_state, parse_address_list,
+    Draft, DraftContent, DraftLink, DraftOptions, Recipient, draft_state, orig_key,
+    parse_address_list,
 };
 pub use dupes::{DupProgress, DupRow, DupStage};
 pub use eml::{EmlStore, sha256_hex};
@@ -35,8 +39,8 @@ pub use model::{
     MessageRow, OpRow, OpSummary, PendingGuard, RowLite, ServerFolder, server_state,
 };
 pub use ops::{
-    MAX_ITEM_ERRORS, OP_COPY, OP_DELETE, OP_DRAFT_SAVE, OP_MOVE, OP_SEND, OP_SET_FLAG, OP_SET_READ,
-    op_backoff_ms,
+    MAX_ITEM_ERRORS, OP_COPY, OP_DELETE, OP_DRAFT_SAVE, OP_MOVE, OP_SEND, OP_SET_FLAG, OP_SET_PIN,
+    OP_SET_READ, op_backoff_ms,
 };
 pub use time::parse_rfc3339_ms;
 
@@ -112,10 +116,11 @@ const FOLDER_COLS: &str = "id, server_id, server_parent_id, parent_id, name, fol
 const MESSAGE_COLS: &str = "id, folder_id, server_item_id, change_key, server_state, eml_hash, \
      archived_at, internet_msg_id, conversation_id, subject, from_name, from_addr, to_list, \
      cc_list, date_received, date_sent, size, has_attachments, is_read, flag, importance, \
-     is_draft, item_class, preview, origin";
+     is_draft, item_class, preview, origin, pinned";
 
 const ROW_COLS: &str = "id, folder_id, subject, from_name, from_addr, to_list, date_received, \
-     size, is_read, flag, has_attachments, importance, server_state, eml_hash IS NOT NULL, origin";
+     size, is_read, flag, has_attachments, importance, server_state, eml_hash IS NOT NULL, origin, \
+     pinned";
 
 /// 목록 정렬 기준.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -167,6 +172,7 @@ fn row_lite(r: &Row<'_>) -> rusqlite::Result<RowLite> {
         archived: r.get::<_, i64>(12)? == server_state::ARCHIVED,
         has_eml: r.get(13)?,
         origin: r.get(14)?,
+        pinned: r.get(15)?,
     })
 }
 
@@ -213,6 +219,7 @@ fn message_row(r: &Row<'_>) -> rusqlite::Result<MessageRow> {
             is_draft: r.get(21)?,
             item_class: r.get(22)?,
             preview: r.get(23)?,
+            pinned: Some(r.get(25)?),
         },
         origin: r.get(24)?,
     })
@@ -313,15 +320,15 @@ impl Store {
         )?)
     }
 
-    /// 목록 창: 폴더의 `offset`부터 `limit`행, 최신순(계획서 4.1-5: 200행 단위).
+    /// 목록 창: 폴더의 `offset`부터 `limit`행, 고정한 메일 먼저 최신순(계획서 4.1-5: 200행 단위).
     pub fn list_rows(&self, folder_id: i64, offset: usize, limit: usize) -> Result<Vec<RowLite>> {
         let conn = self.conn();
-        // 지연 조인: 건너뛸 행은 색인(folder_id, date_received)만 훑고, 보여 줄 행만 본표에서 읽는다.
+        // 지연 조인: 건너뛸 행은 색인(folder_id, pinned, date_received)만 훑고, 보여 줄 행만 본표에서 읽는다.
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {ROW_COLS} FROM ( \
-               SELECT id AS pid, date_received AS d FROM messages WHERE folder_id = ?1 \
-               ORDER BY date_received DESC, id LIMIT ?2 OFFSET ?3 \
-             ) p JOIN messages ON messages.id = p.pid ORDER BY p.d DESC, p.pid"
+               SELECT id AS pid, pinned AS pn, date_received AS d FROM messages WHERE folder_id = ?1 \
+               ORDER BY pinned DESC, date_received DESC, id LIMIT ?2 OFFSET ?3 \
+             ) p JOIN messages ON messages.id = p.pid ORDER BY p.pn DESC, p.d DESC, p.pid"
         ))?;
         let rows = stmt.query_map(
             params![
@@ -360,12 +367,13 @@ impl Store {
                 .collect::<Vec<_>>()
                 .join(",")
         );
+        // 고정한 메일은 어느 정렬에서나 맨 위(1.1.0), 고정끼리·나머지끼리는 고른 기준으로.
         if key == SortKey::Subject {
             let mut stmt = conn.prepare(&format!(
-                "SELECT id, COALESCE(subject, ''), date_received FROM messages WHERE {within}"
+                "SELECT id, COALESCE(subject, ''), date_received, pinned FROM messages WHERE {within}"
             ))?;
-            let mut rows: Vec<(i64, String, i64)> = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            let mut rows: Vec<(i64, String, i64, bool)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
                 .collect::<rusqlite::Result<_>>()?;
             for r in &mut rows {
                 r.1 = normalized_subject(&r.1);
@@ -373,7 +381,10 @@ impl Store {
             rows.sort_by(|a, b| {
                 let k = a.1.cmp(&b.1);
                 let k = if reverse { k.reverse() } else { k };
-                k.then(b.2.cmp(&a.2)).then(b.0.cmp(&a.0))
+                b.3.cmp(&a.3)
+                    .then(k)
+                    .then(b.2.cmp(&a.2))
+                    .then(b.0.cmp(&a.0))
             });
             return Ok(rows.into_iter().map(|r| r.0).collect());
         }
@@ -394,7 +405,8 @@ impl Store {
         };
         let dir = if desc != reverse { "DESC" } else { "ASC" };
         let mut stmt = conn.prepare(&format!(
-            "SELECT id FROM messages WHERE {within} ORDER BY {expr} {dir}, date_received DESC, id DESC"
+            "SELECT id FROM messages WHERE {within} \
+             ORDER BY pinned DESC, {expr} {dir}, date_received DESC, id DESC"
         ))?;
         let ids = stmt
             .query_map([], |r| r.get(0))?
@@ -832,8 +844,8 @@ impl Tx<'_> {
             "INSERT INTO messages(folder_id, server_item_id, change_key, server_state, \
                internet_msg_id, conversation_id, subject, from_name, from_addr, to_list, cc_list, \
                date_received, date_sent, size, has_attachments, is_read, flag, importance, \
-               is_draft, item_class, preview) \
-             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+               is_draft, item_class, preview, pinned) \
+             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 folder_id,
                 server_item_id,
@@ -854,7 +866,8 @@ impl Tx<'_> {
                 p.importance,
                 p.is_draft,
                 p.item_class,
-                p.preview
+                p.preview,
+                p.pinned.unwrap_or(false)
             ],
         )?;
         Ok(self.tx.last_insert_rowid())
@@ -881,7 +894,7 @@ impl Tx<'_> {
                subject = ?4, from_name = ?5, from_addr = ?6, to_list = ?7, cc_list = ?8, \
                date_received = ?9, date_sent = ?10, size = ?11, has_attachments = ?12, \
                is_read = ?13, flag = ?14, importance = ?15, is_draft = ?16, item_class = ?17, \
-               preview = ?18 \
+               preview = ?18, pinned = COALESCE(?20, pinned) \
              WHERE id = ?19",
             params![
                 change_key,
@@ -902,7 +915,8 @@ impl Tx<'_> {
                 p.is_draft,
                 p.item_class,
                 p.preview,
-                id
+                id,
+                p.pinned
             ],
         )?;
         Ok(())
@@ -1209,5 +1223,110 @@ mod tests {
         assert_eq!(s.forget_remote_images().unwrap(), 2);
         assert!(!s.remote_images_allowed("a@x.com").unwrap());
         assert_eq!(s.remote_image_senders().unwrap(), 0);
+    }
+
+    /// 고정(1.1.0): 어느 정렬에서나 맨 위, 동기화는 모르는 값(None)이면 그대로 두고, 대기 작업은 되돌릴 수 있다.
+    #[test]
+    fn pinned_mails_stay_on_top() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        let (f, old, new, newest) = s
+            .transaction(|tx| {
+                let f = tx.upsert_folder(&folder("INBOX", "ROOT", Some("IPF.Note")))?;
+                let old = tx.insert_message(f, "A", None, &props("<a@x>", 1_000))?;
+                let new = tx.insert_message(f, "B", None, &props("<b@x>", 2_000))?;
+                let newest = tx.insert_message(
+                    f,
+                    "C",
+                    None,
+                    &MessageProps {
+                        size: Some(1),
+                        ..props("<c@x>", 3_000)
+                    },
+                )?;
+                Ok((f, old, new, newest))
+            })
+            .unwrap();
+        let ids = |rows: Vec<RowLite>| rows.into_iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(ids(s.list_rows(f, 0, 10).unwrap()), [newest, new, old]);
+        let t = s.mark_pinned(&[old], true, 10).unwrap();
+        assert_eq!(t.queued, 1, "서버 메일이면 서버에도 반영");
+        assert_eq!(ids(s.list_rows(f, 0, 10).unwrap()), [old, newest, new]);
+        assert_eq!(
+            ids(s.list_rows(f, 1, 10).unwrap()),
+            [newest, new],
+            "페이지 나눔도 같은 순서"
+        );
+        assert_eq!(s.list_ids(Some(f)).unwrap(), [old, newest, new]);
+        assert_eq!(
+            s.sorted_ids(f, SortKey::Size, false).unwrap()[0],
+            old,
+            "다른 정렬에서도 맨 위"
+        );
+        assert_eq!(s.sorted_ids(f, SortKey::Subject, true).unwrap()[0], old);
+        assert!(s.list_rows(f, 0, 1).unwrap()[0].pinned);
+        // 동기화: 고정 값을 모르면(None) 그대로, 알면 그 값.
+        s.transaction(|tx| tx.update_message(old, None, None, &props("<a@x>", 1_000)))
+            .unwrap();
+        assert_eq!(s.message(old).unwrap().unwrap().props.pinned, Some(true));
+        let guard = s.pending_guard().unwrap();
+        assert!(
+            guard.keep_pin.contains(&old),
+            "대기 중이면 동기화가 덮지 않게"
+        );
+        // 서버가 거부해 포기하면 되돌린다.
+        let op = s
+            .pending_ops()
+            .unwrap()
+            .into_iter()
+            .find(|o| o.kind == OP_SET_PIN)
+            .unwrap();
+        s.rollback_op(&op).unwrap();
+        assert_eq!(s.message(old).unwrap().unwrap().props.pinned, Some(false));
+        // 서버에서 고정한 메일을 한 번에 표시(업그레이드 뒤).
+        let t = s.pin_from_server(&["B".into(), "없음".into()]).unwrap();
+        assert_eq!(t.folders.values().map(Vec::len).sum::<usize>(), 1);
+        assert_eq!(ids(s.list_rows(f, 0, 10).unwrap()), [new, newest, old]);
+        s.transaction(|tx| {
+            tx.update_message(
+                new,
+                None,
+                None,
+                &MessageProps {
+                    pinned: Some(false),
+                    ..props("<b@x>", 2_000)
+                },
+            )
+        })
+        .unwrap();
+        assert_eq!(
+            ids(s.list_rows(f, 0, 10).unwrap()),
+            [newest, new, old],
+            "서버에서 풀림"
+        );
+    }
+
+    /// 전달에서 뺀 원본 첨부(1.1.0): 빼고 되돌리면 목록이 맞고, 서버에 다시 올릴 것으로 표시한다.
+    #[test]
+    fn excluded_originals_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        let id = s
+            .create_draft("forward", None, &DraftContent::default(), 1)
+            .unwrap();
+        assert!(s.draft(id).unwrap().unwrap().excluded_orig.is_empty());
+        let (a, b) = (orig_key(0, "a.pdf"), orig_key(1, "a.pdf"));
+        s.set_orig_excluded(id, &a, true, 2).unwrap();
+        s.set_orig_excluded(id, &b, true, 3).unwrap();
+        s.set_orig_excluded(id, &a, false, 4).unwrap();
+        let d = s.draft(id).unwrap().unwrap();
+        assert_eq!(
+            d.excluded_orig,
+            std::slice::from_ref(&b),
+            "이름이 같아도 순번으로 가른다"
+        );
+        assert!(d.server_dirty);
+        s.set_orig_excluded(id, &b, false, 5).unwrap();
+        assert!(s.draft(id).unwrap().unwrap().excluded_orig.is_empty());
     }
 }

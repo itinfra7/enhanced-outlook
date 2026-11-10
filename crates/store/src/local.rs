@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::ops::{OP_COPY, OP_DELETE, OP_MOVE, OP_SET_FLAG, OP_SET_READ};
+use crate::ops::{OP_COPY, OP_DELETE, OP_MOVE, OP_SET_FLAG, OP_SET_PIN, OP_SET_READ};
 use crate::{
     Error, FOLDER_COLS, FolderRow, MESSAGE_COLS, MessageRow, OpRow, Result, RowLite, Store, Tx,
     folder_row, message_row, row_lite, server_state,
@@ -91,6 +91,14 @@ impl Tx<'_> {
         self.tx.execute(
             "UPDATE messages SET flag = ?1 WHERE id = ?2",
             params![flag, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_pinned(&self, id: i64, pinned: bool) -> Result<()> {
+        self.tx.execute(
+            "UPDATE messages SET pinned = ?1 WHERE id = ?2",
+            params![pinned, id],
         )?;
         Ok(())
     }
@@ -282,6 +290,50 @@ impl Store {
         })
     }
 
+    /// 고정·해제(1.1.0). 서버 메일은 웹메일의 고정과 같게 서버에도 반영한다(HCL Domino·가져온 메일은 로컬만).
+    pub fn mark_pinned(&self, ids: &[i64], pinned: bool, now_ms: i64) -> Result<Touched> {
+        self.transaction(|tx| {
+            let mut t = Touched::default();
+            for &id in ids {
+                let Some(row) = tx.message(id)? else { continue };
+                let prev = row.props.pinned.unwrap_or(false);
+                if prev == pinned {
+                    continue;
+                }
+                tx.set_pinned(id, pinned)?;
+                if on_server(&row) {
+                    let q = tx.enqueue_op(
+                        OP_SET_PIN,
+                        Some(id),
+                        &json!({"pin": pinned, "prev": prev}),
+                        now_ms,
+                        None,
+                    )?;
+                    t.queued += usize::from(q.is_some());
+                }
+                t.add(row.folder_id, id);
+            }
+            Ok(t)
+        })
+    }
+
+    /// 서버에서 고정한 것으로 확인한 메일을 고정으로 표시한다(업그레이드 뒤 한 번, 1.1.0). 바뀐 것.
+    pub fn pin_from_server(&self, server_item_ids: &[String]) -> Result<Touched> {
+        self.transaction(|tx| {
+            let mut t = Touched::default();
+            for sid in server_item_ids {
+                let Some(row) = tx.message_by_server_id(sid)? else {
+                    continue;
+                };
+                if row.props.pinned != Some(true) {
+                    tx.set_pinned(row.id, true)?;
+                    t.add(row.folder_id, row.id);
+                }
+            }
+            Ok(t)
+        })
+    }
+
     /// 이동(지운 편지함으로 삭제도 이것). 서버에서 사라진 폴더로는 서버 메일을 옮길 수 없다.
     pub fn move_messages(
         &self,
@@ -465,6 +517,12 @@ impl Store {
                         t.add(row.folder_id, mid);
                     }
                 }
+                OP_SET_PIN => {
+                    if let Some(prev) = p.get("prev").and_then(Value::as_bool) {
+                        tx.set_pinned(mid, prev)?;
+                        t.add(row.folder_id, mid);
+                    }
+                }
                 OP_MOVE => {
                     let (to, from) = (
                         p.get("to").and_then(Value::as_i64),
@@ -551,7 +609,8 @@ impl Store {
         let rows = match folder_id {
             Some(f) => {
                 let mut stmt = conn.prepare_cached(
-                    "SELECT id FROM messages WHERE folder_id = ?1 ORDER BY date_received DESC, id",
+                    "SELECT id FROM messages WHERE folder_id = ?1 \
+                     ORDER BY pinned DESC, date_received DESC, id",
                 )?;
                 stmt.query_map([f], |r| r.get(0))?
                     .collect::<rusqlite::Result<Vec<i64>>>()?

@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use eo_owa::{DeleteType, FolderRef, ItemError, ItemId};
 use eo_store::{
     MAX_ITEM_ERRORS, MessageRow, OP_COPY, OP_DELETE, OP_DRAFT_SAVE, OP_MOVE, OP_SEND, OP_SET_FLAG,
-    OP_SET_READ, OpRow, Touched, server_state,
+    OP_SET_PIN, OP_SET_READ, OpRow, Touched, server_state,
 };
 use serde_json::Value;
 
@@ -73,7 +73,7 @@ fn run_key(op: &OpRow) -> String {
 
 fn batch_size(kind: &str) -> usize {
     match kind {
-        OP_SET_READ | OP_SET_FLAG => 10,
+        OP_SET_READ | OP_SET_FLAG | OP_SET_PIN => 10,
         OP_SEND | OP_DRAFT_SAVE => 1,
         _ => 50,
     }
@@ -142,14 +142,29 @@ impl Engine {
             Ok(())
         };
         match kind {
-            OP_SET_READ | OP_SET_FLAG => {
+            OP_SET_READ | OP_SET_FLAG | OP_SET_PIN => {
                 for (k, op) in run.iter().enumerate() {
                     pick(k, op, &mut out)?;
                 }
                 if targets.is_empty() {
                     return Ok(out);
                 }
-                let results = if kind == OP_SET_READ {
+                let results = if kind == OP_SET_PIN {
+                    let items: Vec<(ItemId, bool)> = targets
+                        .iter()
+                        .map(|(k, _, sid)| {
+                            (
+                                bare(sid),
+                                run[*k]
+                                    .payload
+                                    .get("pin")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false),
+                            )
+                        })
+                        .collect();
+                    self.client().set_pinned(&items).await?
+                } else if kind == OP_SET_READ {
                     let items: Vec<(ItemId, bool)> = targets
                         .iter()
                         .map(|(k, _, sid)| {

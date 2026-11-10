@@ -37,5 +37,7 @@ pub fn props(item: &ItemSummary) -> MessageProps {
         is_draft: item.is_draft.unwrap_or(false),
         item_class: item.item_class.clone(),
         preview: item.preview.clone(),
+        // 목록 속성에 RenewTime이 들어 있다: 없으면 고정하지 않은 메일.
+        pinned: Some(eo_owa::is_pinned(item.renew_time.as_deref())),
     }
 }

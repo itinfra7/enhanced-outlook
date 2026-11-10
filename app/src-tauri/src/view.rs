@@ -50,6 +50,8 @@ pub struct RowView {
     pub origin: Option<String>,
     /// 임시 보관함에서 쓰던 메일의 상태(0 작성 중, 1 보내는 중, 2 발송 실패).
     pub draft: Option<i64>,
+    /// 고정(맨 위, 1.1.0).
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,6 +265,7 @@ impl From<RowLite> for RowView {
             has_eml: r.has_eml,
             origin: r.origin,
             draft: None,
+            pinned: r.pinned,
         }
     }
 }

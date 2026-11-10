@@ -269,6 +269,8 @@ pub struct ItemSummary {
     /// 요청 속성 이름은 `ItemLastModifiedTime`, 응답 키는 `LastModifiedTime`(계획서 5.1).
     pub last_modified_time: Option<String>,
     pub is_draft: Option<bool>,
+    /// 웹메일의 고정(1.1.0): 고정한 메일만 4500-09-01([`crate::is_pinned`]).
+    pub renew_time: Option<String>,
     /// `Attachments`를 요청했을 때(초안의 첨부 ID, 0.7.0 임시 보관함 저장).
     pub attachments: Option<Vec<ServerAttachment>>,
 }

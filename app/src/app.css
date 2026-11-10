@@ -11,6 +11,9 @@
   --border-soft: #ececef;
   --accent: #0f6cbd;
   --accent-text: #0f5aa3;
+  /* 플래그 메일 행(웹메일처럼 옅은 노랑) */
+  --bg-flag: #fff4ce;
+  --bg-flag-hover: #fcedb8;
 
   color-scheme: light dark;
   font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
@@ -33,6 +36,8 @@
     --border-soft: #2f2f33;
     --accent: #4aa3ff;
     --accent-text: #7dbdff;
+    --bg-flag: #3b3520;
+    --bg-flag-hover: #463f26;
   }
 }
 

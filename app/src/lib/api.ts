@@ -11,6 +11,7 @@ import type {
   DupFound,
   FileView,
   FolderView,
+  OrigFileView,
   MemoryReport,
   Recipient,
   Opened,
@@ -18,6 +19,7 @@ import type {
   Preview,
   Progress,
   Range,
+  RedirectPreview,
   Settings,
   SettingsView,
   SpacePreview,
@@ -52,15 +54,18 @@ export const api = {
   openAttachment: (id: number, index: number) => invoke<void>('open_attachment', { id, index }),
   login: (username: string, password: string) => invoke<void>('login', { username, password }),
   logout: () => invoke<void>('logout'),
+  forgetUser: (domino: boolean) => invoke<void>('forget_user', { domino }),
   syncNow: () => invoke<void>('sync_now'),
   // HCL Domino 계정 연동(0.5.0)
   dominoLogin: (username: string, password: string) => invoke<void>('domino_login', { username, password }),
   dominoLogout: () => invoke<void>('domino_logout'),
   dominoSyncNow: () => invoke<void>('domino_sync_now'),
   dominoCleanupPreview: (cleanup: Cleanup) => invoke<number | null>('domino_cleanup_preview', { cleanup }),
+  dominoRedirectsPreview: () => invoke<RedirectPreview>('domino_redirects_preview'),
   // 메일 조작(5단계): 로컬에 바로 반영되고 서버 작업은 뒤에서
   markRead: (ids: number[], read: boolean) => invoke<ActionResult>('mark_read', { ids, read }),
   setFlag: (ids: number[], flag: number) => invoke<ActionResult>('set_flag', { ids, flag }),
+  setPinned: (ids: number[], pinned: boolean) => invoke<ActionResult>('set_pinned', { ids, pinned }),
   moveMessages: (ids: number[], to: number) => invoke<ActionResult>('move_messages', { ids, to }),
   copyMessages: (ids: number[], to: number) => invoke<ActionResult>('copy_messages', { ids, to }),
   deleteMessages: (ids: number[]) => invoke<ActionResult>('delete_messages', { ids }),
@@ -85,7 +90,7 @@ export const api = {
   importStart: (paths: string[]) => invoke<void>('import_start', { paths }),
   importCancel: () => invoke<void>('import_cancel'),
   // 작성(6단계)
-  composeNew: (kind: 'new' | 'reply' | 'reply_all' | 'forward', refId: number | null) =>
+  composeNew: (kind: 'new' | 'reply' | 'reply_all' | 'forward' | 'copy', refId: number | null) =>
     invoke<number>('compose_new', { kind, refId }),
   composePopout: (draftId: number) => invoke<void>('compose_popout', { draftId }),
   composeInWindow: (draftId: number) => invoke<boolean>('compose_in_window', { draftId }),
@@ -100,6 +105,8 @@ export const api = {
   composePickFiles: (draftId: number) => invoke<FileView[]>('compose_pick_files', { draftId }),
   composeRemoveFile: (draftId: number, name: string) =>
     invoke<FileView[]>('compose_remove_file', { draftId, name }),
+  composeExcludeOriginal: (draftId: number, key: string, excluded: boolean) =>
+    invoke<OrigFileView[]>('compose_exclude_original', { draftId, key, excluded }),
   composeSend: (draftId: number, content: DraftSave) => invoke<void>('compose_send', { draftId, content }),
   composeDiscard: (draftId: number) => invoke<void>('compose_discard', { draftId }),
   folderMarkRead: (folderId: number) => invoke<ActionResult>('folder_mark_read', { folderId }),

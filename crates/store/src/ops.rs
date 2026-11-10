@@ -18,6 +18,8 @@ use crate::{BatchProgress, OpRow, OpSummary, PendingGuard, Result, Store, Tx};
 
 pub const OP_SET_READ: &str = "set_read";
 pub const OP_SET_FLAG: &str = "set_flag";
+/// 고정·해제(`{"pin": bool, "prev": bool}`, 1.1.0). 웹메일과 같은 RenewTime.
+pub const OP_SET_PIN: &str = "set_pin";
 pub const OP_MOVE: &str = "move";
 pub const OP_COPY: &str = "copy";
 pub const OP_DELETE: &str = "delete";
@@ -30,7 +32,11 @@ pub const OP_DRAFT_SAVE: &str = "draft_save";
 pub const MAX_ITEM_ERRORS: i64 = 5;
 
 /// 최종값만 의미 있는 작업(대기 중이면 덮어쓴다)과 그 값 필드.
-const COALESCED: &[(&str, &str)] = &[(OP_SET_READ, "read"), (OP_SET_FLAG, "flag")];
+const COALESCED: &[(&str, &str)] = &[
+    (OP_SET_READ, "read"),
+    (OP_SET_FLAG, "flag"),
+    (OP_SET_PIN, "pin"),
+];
 
 const MAX_BACKOFF_MS: i64 = 5 * 60 * 1000;
 
@@ -251,6 +257,9 @@ impl Store {
                 }
                 (OP_SET_FLAG, Some(m)) => {
                     g.keep_flag.insert(m);
+                }
+                (OP_SET_PIN, Some(m)) => {
+                    g.keep_pin.insert(m);
                 }
                 (OP_MOVE, Some(m)) => {
                     g.keep_folder.insert(m);

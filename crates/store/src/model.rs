@@ -54,6 +54,8 @@ pub struct MessageProps {
     pub is_draft: bool,
     pub item_class: Option<String>,
     pub preview: Option<String>,
+    /// 고정(1.1.0). `None`이면 모른다: 저장된 값을 그대로 둔다(고정 속성을 요청하지 않은 응답 등).
+    pub pinned: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +93,8 @@ pub struct RowLite {
     pub has_eml: bool,
     /// 가져온 메일의 출처(`import`, `html`).
     pub origin: Option<String>,
+    /// 고정(맨 위, 1.1.0).
+    pub pinned: bool,
 }
 
 /// 폴더별 건수(상태 표시용).
@@ -158,6 +162,8 @@ pub struct PendingGuard {
     pub keep_folder: std::collections::HashSet<i64>,
     pub keep_read: std::collections::HashSet<i64>,
     pub keep_flag: std::collections::HashSet<i64>,
+    /// 고정·해제 대기(1.1.0).
+    pub keep_pin: std::collections::HashSet<i64>,
     /// 서버에서 삭제(로컬 보관) 대기: 보관 표시를 풀지 않는다.
     pub keep_state: std::collections::HashSet<i64>,
     /// 완전 삭제 대기: 이 서버 항목이 다시 들어와도 만들지 않는다.
