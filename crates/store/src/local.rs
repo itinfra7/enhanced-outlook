@@ -144,14 +144,17 @@ impl Tx<'_> {
         archived_at: Option<i64>,
     ) -> Result<i64> {
         self.tx.execute(
-            "INSERT INTO messages(folder_id, server_item_id, change_key, server_state, internet_msg_id, \
-               conversation_id, subject, from_name, from_addr, to_list, cc_list, bcc_list, date_received, \
-               date_sent, size, has_attachments, is_read, flag, importance, is_draft, item_class, preview, \
-               eml_hash, indexed, archived_at, origin) \
-             SELECT ?1, NULL, NULL, ?2, internet_msg_id, conversation_id, subject, from_name, from_addr, \
-               to_list, cc_list, bcc_list, date_received, date_sent, size, has_attachments, is_read, flag, \
-               importance, is_draft, item_class, preview, eml_hash, 0, ?3, origin \
-             FROM messages WHERE id = ?4",
+            &format!(
+                "INSERT INTO messages(id, folder_id, server_item_id, change_key, server_state, \
+                   internet_msg_id, conversation_id, subject, from_name, from_addr, to_list, cc_list, \
+                   bcc_list, date_received, date_sent, size, has_attachments, is_read, flag, importance, \
+                   is_draft, item_class, preview, eml_hash, indexed, archived_at, origin) \
+                 SELECT {}, ?1, NULL, NULL, ?2, internet_msg_id, conversation_id, subject, from_name, \
+                   from_addr, to_list, cc_list, bcc_list, date_received, date_sent, size, has_attachments, \
+                   is_read, flag, importance, is_draft, item_class, preview, eml_hash, 0, ?3, origin \
+                 FROM messages WHERE id = ?4",
+                crate::schema::NEXT_MESSAGE_ID
+            ),
             params![folder_id, state, archived_at, src.id],
         )?;
         Ok(self.tx.last_insert_rowid())
