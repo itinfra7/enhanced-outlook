@@ -543,6 +543,9 @@ impl Store {
                     hashes.extend(tx.purge_row(dup)?);
                 }
                 tx.set_server_item(mid, server_id, change_key)?;
+                // 임시 보관함 행의 원문은 앞서 올린 내용이다: 서버의 새 내용으로 다시 받는다. 위에서 서버 변경
+                // 표시를 서버 값으로 맞춰 동기화는 바뀐 줄 모른다(1.2.1 사용자 신고: 템플릿에 복사하면 옛 내용).
+                hashes.extend(tx.invalidate_eml(mid)?);
             }
             Ok(hashes)
         })
@@ -1016,6 +1019,58 @@ mod tests {
         assert_eq!(s.draft(id).unwrap().unwrap().subject, "RE: b");
         s.delete_draft(id).unwrap();
         assert!(s.draft(id).unwrap().is_none() && !s.draft_dir(id).exists());
+    }
+
+    /// 1.2.1 사용자 신고: 고쳐 서버에 저장한 초안을 템플릿에 복사하면 처음 받은 원문(옛 내용)이 복사됐다.
+    #[test]
+    fn uploaded_draft_refetches_eml() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        let mid = s
+            .transaction(|tx| {
+                let f = tx.upsert_folder(&ServerFolder {
+                    server_id: "DRAFTS".into(),
+                    server_parent_id: Some("ROOT".into()),
+                    name: "임시 보관함".into(),
+                    folder_class: Some("IPF.Note".into()),
+                })?;
+                tx.insert_message(
+                    f,
+                    "S1",
+                    Some("ck1"),
+                    &MessageProps {
+                        is_draft: true,
+                        ..MessageProps::default()
+                    },
+                )
+            })
+            .unwrap();
+        assert!(s.attach_eml(mid, "S1", b"old").unwrap());
+        let id = s
+            .import_server_draft(mid, "S1", &DraftContent::default(), 1)
+            .unwrap();
+        let c = DraftContent {
+            body_html: "<p>새 내용</p>".into(),
+            ..DraftContent::default()
+        };
+        assert!(s.save_draft(id, &c, 2).unwrap());
+        s.finish_draft_upload(id, "S1", Some("ck2"), 2).unwrap();
+        let row = s.message(mid).unwrap().unwrap();
+        assert_eq!(
+            (row.eml_hash, row.change_key.as_deref()),
+            (None, Some("ck2"))
+        );
+        let todo: Vec<i64> = s
+            .eml_todo(10)
+            .unwrap()
+            .iter()
+            .map(|t| t.message_id)
+            .collect();
+        assert_eq!(todo, [mid]);
+        assert!(
+            s.eml().get(&crate::sha256_hex(b"old")).is_err(),
+            "쓰는 행이 없는 옛 원문은 지운다"
+        );
     }
 
     #[test]
