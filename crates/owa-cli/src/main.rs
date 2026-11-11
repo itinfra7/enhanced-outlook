@@ -148,6 +148,12 @@ enum Command {
         /// (문서를 열면 서버가 'new' 표시를 지운다)
         #[arg(long, value_delimiter = ',')]
         fields: Vec<String>,
+        /// (조사용) 같은 회사 도메인 주소를 세션 쿠키로 GET해 `--out` 폴더에 저장한다(읽기만, 리다이렉트는 따라감 5번까지).
+        /// 여러 개는 공백 없이 `|`로
+        #[arg(long, value_delimiter = '|')]
+        get: Vec<String>,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// 로컬 저장소·동기화 엔진(2단계)
     Store {
@@ -366,6 +372,8 @@ async fn run(cli: Cli) -> Result<()> {
         delete_test,
         action_test,
         fields,
+        get,
+        out,
     } = &cli.command
     {
         return domino_cmd::run(
@@ -375,7 +383,11 @@ async fn run(cli: Cli) -> Result<()> {
             *max,
             delete_test.clone(),
             action_test.clone(),
-            fields,
+            domino_cmd::Probe {
+                fields,
+                get,
+                out: out.as_deref(),
+            },
         )
         .await;
     }

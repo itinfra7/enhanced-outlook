@@ -197,6 +197,13 @@ async fn delete_test_run(client: &Domino, marker: &str) -> Result<()> {
     Ok(())
 }
 
+/// (조사용) 읽을 숨은 필드(--fields), 세션 쿠키로 GET할 주소와 저장 폴더(--get·--out).
+pub struct Probe<'a> {
+    pub fields: &'a [String],
+    pub get: &'a [String],
+    pub out: Option<&'a Path>,
+}
+
 pub async fn run(
     portal: &str,
     root: Option<&Path>,
@@ -204,8 +211,9 @@ pub async fn run(
     max: Option<usize>,
     delete_test: Option<String>,
     action_test: Option<String>,
-    fields: &[String],
+    probe: Probe<'_>,
 ) -> Result<()> {
+    let Probe { fields, get, out } = probe;
     let client = Domino::new(DominoConfig::new(portal)?);
     let username = crate::prompt::read_username_as("HCL Domino 아이디")?;
     let mut login = None;
@@ -249,6 +257,127 @@ pub async fn run(
             limit.map_or("모름".to_owned(), |b| fmt_bytes(b as u64))
         ),
         Err(e) => println!("용량 확인 실패: {e}"),
+    }
+    // `--get watch`: 로그인을 한 번 하고 `--out\queue.txt`에 붙는 주소를 계속 받는다(`END` 줄이면 끝, 읽기만).
+    if get.first().map(String::as_str) == Some("watch") {
+        let out = out.context("--out 폴더를 주세요")?;
+        std::fs::create_dir_all(out)?;
+        let queue = out.join("queue.txt");
+        let log = out.join("log.txt");
+        let mut done = 0usize;
+        let mut n = 0usize;
+        println!("대기 중: {}", queue.display());
+        loop {
+            let lines: Vec<String> = std::fs::read_to_string(&queue)
+                .unwrap_or_default()
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect();
+            for url in lines.iter().skip(done) {
+                done += 1;
+                if url == "END" {
+                    println!("끝");
+                    return Ok(());
+                }
+                let mut cur = url.clone();
+                for hop in 0..6 {
+                    n += 1;
+                    let line = match client.probe_get(&cur).await {
+                        Ok((status, location, ctype, body)) => {
+                            let file = out.join(format!("r{n}.bin"));
+                            std::fs::write(&file, &body)?;
+                            let line = format!(
+                                "r{n} {status} {ctype} {}B {cur} -> {}",
+                                body.len(),
+                                location.clone().unwrap_or_default()
+                            );
+                            match location {
+                                Some(l) if (300..400).contains(&status) => {
+                                    cur = if l.starts_with("http") {
+                                        l
+                                    } else {
+                                        let host_end =
+                                            cur[8..].find('/').map_or(cur.len(), |i| i + 8);
+                                        format!("{}{}", &cur[..host_end], l)
+                                    };
+                                    let _ = hop;
+                                    Some(line)
+                                }
+                                _ => {
+                                    let mut f = std::fs::OpenOptions::new()
+                                        .create(true)
+                                        .append(true)
+                                        .open(&log)?;
+                                    std::io::Write::write_all(
+                                        &mut f,
+                                        format!("{line}\n").as_bytes(),
+                                    )?;
+                                    None
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let mut f = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&log)?;
+                            std::io::Write::write_all(
+                                &mut f,
+                                format!("r{n} 오류 {cur}: {e}\n").as_bytes(),
+                            )?;
+                            None
+                        }
+                    };
+                    match line {
+                        Some(l) => {
+                            let mut f = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&log)?;
+                            std::io::Write::write_all(&mut f, format!("{l}\n").as_bytes())?;
+                        }
+                        None => break,
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        }
+    }
+    if !get.is_empty() {
+        let out = out.context("--out 폴더를 주세요")?;
+        std::fs::create_dir_all(out)?;
+        for (i, first) in get.iter().enumerate() {
+            let mut url = first.clone();
+            for hop in 0..6 {
+                let (status, location, ctype, body) = client.probe_get(&url).await?;
+                let file = out.join(format!("get{i}-{hop}.html"));
+                std::fs::write(&file, &body)?;
+                println!(
+                    "[{i}.{hop}] {status} {ctype} {}바이트 → {} | {url}{}",
+                    body.len(),
+                    file.display(),
+                    location
+                        .as_deref()
+                        .map(|l| format!("\n      Location: {l}"))
+                        .unwrap_or_default()
+                );
+                match location {
+                    Some(l) if (300..400).contains(&status) => {
+                        url = if l.starts_with("http") {
+                            l
+                        } else {
+                            // 같은 서버의 경로.
+                            let host_end = url[8..].find('/').map_or(url.len(), |i| i + 8);
+                            format!("{}{}", &url[..host_end], l)
+                        };
+                    }
+                    _ => break,
+                }
+            }
+        }
+        return Ok(());
     }
     if !fields.is_empty() {
         for unid in fields {
