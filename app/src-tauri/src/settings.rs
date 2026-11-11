@@ -73,6 +73,8 @@ pub struct DominoSettings {
     // 값은 읽을 때 무시한다(이름을 다시 쓰지 않는다).
     /// Outlook에서 리다이렉트되어 온 HCL Domino 사본을 서버·로컬에서 지운다(1.1.0, `crate::redirects`).
     pub remove_redirects: bool,
+    /// 알림 메일의 `[연결문서]`가 가리키는 업무 문서를 본문 아래에 붙인다(1.2.0, `crate::linked`).
+    pub linked_docs: bool,
 }
 
 /// 새 메일 알림 내용(사용자 요청 2026-10-21). 읽지 않은 메일 수(받은 편지함, 통합 편지함을 켰으면 통합 편지함)는 늘 보인다.
@@ -332,6 +334,7 @@ mod tests {
                 },
                 unified: true,
                 remove_redirects: true,
+                linked_docs: true,
             },
             notify: NotifyMode::SenderSubject,
             sheet_paste: SheetPaste::Image,

@@ -497,6 +497,7 @@ fn render_view(st: &AppState, id: i64, allow_remote: bool) -> CmdResult<MessageV
         origin: m.origin.clone(),
         has_eml: m.eml_hash.is_some(),
         inline_images: 0,
+        linked: None,
     };
     let preview = p.preview.clone().unwrap_or_default();
     let Some(raw) = st.raw(id, m.eml_hash.as_deref()) else {
@@ -542,11 +543,16 @@ fn render_view(st: &AppState, id: i64, allow_remote: bool) -> CmdResult<MessageV
             size: a.size,
         })
         .collect();
+    crate::linked::decorate(st, id, &mut v);
     Ok(v)
 }
 
 /// 캐시 우선(계획서 4.1-6). 원문이 있는 것만 캐시한다(원문이 오면 다시 그려야 하므로).
-fn cached_or_render(st: &AppState, id: i64, allow_remote: bool) -> CmdResult<(MessageView, bool)> {
+pub(crate) fn cached_or_render(
+    st: &AppState,
+    id: i64,
+    allow_remote: bool,
+) -> CmdResult<(MessageView, bool)> {
     if let Some(v) = lock(&st.views).get(&id)
         && (!allow_remote || v.remote_allowed || !v.has_remote_images)
     {
@@ -1285,8 +1291,8 @@ pub async fn set_settings(app: AppHandle, settings: Settings) -> CmdResult<Setti
         st.domino
             .configure(eo_owa::domino::DominoConfig::new(&new.domino.portal).ok());
     }
-    if old.remote_images != new.remote_images {
-        // 읽기 창 캐시에는 앞 정책으로 그린 본문이 있다.
+    if old.remote_images != new.remote_images || old.domino.linked_docs != new.domino.linked_docs {
+        // 읽기 창 캐시에는 앞 정책으로 그린 본문이 있다(연결문서를 붙이거나 뺀다).
         lock(&st.views).clear();
     }
     if let Some(engine) = &st.session.lock().await.engine {

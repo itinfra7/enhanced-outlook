@@ -1364,6 +1364,7 @@
         online={status.loggedIn}
         highlight={terms}
         oncompose={(kind) => void compose(kind)}
+        onlinkedchanged={() => void reopenCurrent()}
       />
       {/if}
     </div>

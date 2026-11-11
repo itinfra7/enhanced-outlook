@@ -115,6 +115,7 @@
         if (n != null) toast(`첨부 ${n}개를 저장했습니다`);
       })}
     {online}
+    onlinkedchanged={() => void load(msg?.remoteAllowed ?? false)}
     oncompose={(kind) =>
       void run(async () => {
         composeId = await api.composeNew(kind, messageId);

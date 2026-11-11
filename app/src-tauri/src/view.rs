@@ -89,6 +89,18 @@ pub struct MessageView {
     pub has_eml: bool,
     /// 본문이 쓰는 인라인 이미지 수.
     pub inline_images: usize,
+    /// HCL Domino 알림 메일의 연결문서(설정을 켰고 링크가 있을 때).
+    pub linked: Option<LinkedView>,
+}
+
+/// 연결문서 상태(`crate::linked`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedView {
+    /// 가져올 수 있는 업무(SysID를 안다).
+    pub supported: bool,
+    /// 저장해 둔 것을 가져온 때(유닉스 초). 없으면 아직 못 가져왔다.
+    pub fetched_at: Option<i64>,
 }
 
 /// 통합 편지함(화면에만 있는 폴더 번호).

@@ -267,6 +267,16 @@ CREATE TRIGGER id_seq_drafts AFTER INSERT ON drafts BEGIN
   UPDATE id_seq SET value = MAX(value, NEW.id) WHERE name = 'drafts';
 END;
 "#,
+    // 17: HCL Domino 메일의 연결문서(1.2.0 사용자 요청). 메일을 열 때마다 새로 가져오고, 오프라인이면 마지막 것을 보인다.
+    //     `html`: 메일 본문 끝에 붙일 완성 조각(CSS·그림을 품었다), `fetched_at`: 가져온 때(유닉스 초).
+    r#"
+CREATE TABLE linked_docs (
+  message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  html       TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL
+);
+"#,
 ];
 
 /// 새 메일 행 번호(지운 번호를 다시 쓰지 않는다, 마이그레이션 16). `INSERT INTO messages(id, …)`의 값 자리에 쓴다.

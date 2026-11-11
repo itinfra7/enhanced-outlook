@@ -23,6 +23,8 @@
     /** 검색 결과에서 연 메일이면 본문에서 칠할 검색어 */
     highlight?: string[];
     oncompose: (kind: 'reply' | 'reply_all' | 'forward' | 'copy') => void;
+    /** 연결문서를 새로 가져와 내용이 바뀌었다(메일을 다시 연다) */
+    onlinkedchanged?: () => void;
   }
 
   let {
@@ -36,6 +38,7 @@
     online,
     highlight = [],
     oncompose,
+    onlinkedchanged,
   }: Props = $props();
 
   const BLANK = '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>';
@@ -48,6 +51,41 @@
     expanded = false;
     imgMenu = false;
   });
+
+  // 연결문서(1.2.0): 메일을 열 때마다 새로 가져온다. 바뀌었으면 메일을 다시 연다(같은 메일을 다시 그릴 때는 다시
+  // 가져오지 않는다). 못 가져오면 저장해 둔 마지막 내용이 본문에 그대로 있다.
+  let linkedFor = 0;
+  let linkedBusy = $state(false);
+  let linkedError = $state<string | null>(null);
+  let linkedAt = $state<number | null>(null);
+
+  $effect(() => {
+    const m = msg;
+    if (!m || m.id === linkedFor) return;
+    linkedFor = m.id;
+    linkedError = null;
+    linkedAt = null;
+    linkedBusy = false;
+    if (!m.linked?.supported) return;
+    const id = m.id;
+    linkedBusy = true;
+    api
+      .linkedRefresh(id)
+      .then((r) => {
+        if (linkedFor !== id) return;
+        linkedError = r.error;
+        linkedAt = r.fetchedAt;
+        if (r.changed) onlinkedchanged?.();
+      })
+      .catch((e) => {
+        if (linkedFor === id) linkedError = String(e);
+      })
+      .finally(() => {
+        if (linkedFor === id) linkedBusy = false;
+      });
+  });
+
+  let linkedSaved = $derived(linkedAt ?? msg?.linked?.fetchedAt ?? null);
 
   let senderDomain = $derived(msg?.sender.includes('@') ? msg.sender.split('@').pop() ?? '' : '');
 
@@ -155,6 +193,17 @@
           {/if}
         </div>
       {/if}
+      {#if msg.linked && !msg.linked.supported}
+        <div class="linked">연결문서: 지원하지 않는 업무라 내용을 가져오지 않습니다</div>
+      {:else if msg.linked && linkedBusy && linkedSaved == null}
+        <div class="linked">연결문서를 가져오는 중…</div>
+      {:else if msg.linked && linkedError}
+        <div class="linked warn">
+          연결문서를 가져오지 못했습니다({linkedError}){linkedSaved != null
+            ? ` · 아래는 ${fullDate(linkedSaved * 1000)}에 가져온 내용`
+            : ''}
+        </div>
+      {/if}
       {#if msg.hasRemoteImages && !msg.remoteAllowed}
         <div class="remote">
           외부 이미지 차단됨
@@ -237,6 +286,20 @@
     border-radius: 4px;
     color: #0e5a8a;
     background: #e3f1fb;
+  }
+
+  .linked {
+    margin: 8px 0 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 4px;
+    color: #0e5a8a;
+    background: #e3f1fb;
+  }
+
+  .linked.warn {
+    color: #8a5300;
+    background: #fff4ce;
   }
 
   .archived {

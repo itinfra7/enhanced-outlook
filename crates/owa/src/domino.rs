@@ -186,6 +186,8 @@ pub struct Domino {
     session: RwLock<Option<Arc<Session>>>,
     login_lock: tokio::sync::Mutex<()>,
     generation: AtomicU64,
+    /// 연결문서 앱 서버 연결(세션 세대, 서버, 연결). 문서 하나에 CSS·그림까지 여러 번 받으므로 다시 쓴다.
+    linked: Mutex<Option<(u64, String, Arc<Http>)>>,
 }
 
 impl Domino {
@@ -203,6 +205,7 @@ impl Domino {
             session: RwLock::new(None),
             login_lock: tokio::sync::Mutex::new(()),
             generation: AtomicU64::new(0),
+            linked: Mutex::new(None),
         }
     }
 
@@ -389,6 +392,99 @@ impl Domino {
             relogged = true;
             self.relogin(s.generation).await?;
         }
+    }
+
+    /// 연결문서(1.2.0): 같은 회사 도메인의 앱 서버에서 업무 문서·그 CSS·그림을 GET(로그인 쿠키를 싣는다).
+    /// [`notes::linked_allowed`] 밖은 보내지 않는다. 세션이 끝났으면 다시 로그인해 한 번 더.
+    pub async fn fetch_linked(&self, url: &str) -> Result<Fetched> {
+        let cfg = self.config()?;
+        let u = Url::parse(url)?;
+        let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
+        let path = u[url::Position::BeforePath..]
+            .trim_start_matches('/')
+            .to_owned();
+        if u.scheme() != "https"
+            || u.port().is_some()
+            || !u.username().is_empty()
+            || !host.ends_with(&cfg.mail_host_suffix)
+            || !notes::linked_allowed(&path)
+        {
+            return Err(Error::NotAllowed(url.to_owned()));
+        }
+        let mut relogged = false;
+        let mut resent = false;
+        loop {
+            let s = self.current()?;
+            let http = self.linked_http(&cfg, &s, &host)?;
+            let resp = match http.send(Request::get(path.clone())).await {
+                Ok(r) => r,
+                Err(Error::Http(_)) if !resent => {
+                    resent = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            if !is_expired(&resp) {
+                ok_status(&resp, "연결문서")?;
+                return Ok(fetched(resp));
+            }
+            if relogged {
+                return Err(Error::SessionExpired);
+            }
+            relogged = true;
+            self.relogin(s.generation).await?;
+        }
+    }
+
+    fn linked_http(&self, cfg: &DominoConfig, s: &Session, host: &str) -> Result<Arc<Http>> {
+        let mut cur = lock(&self.linked);
+        if let Some((g, h, http)) = cur.as_ref()
+            && *g == s.generation
+            && h == host
+        {
+            return Ok(Arc::clone(http));
+        }
+        let mail_url = Url::parse(&format!("{}://{}/", cfg.portal.scheme(), s.loc.host))?;
+        let http = Arc::new(Http::new(
+            &Url::parse(&format!("https://{host}/"))?,
+            &cfg.user_agent,
+            cfg.timeout,
+            false,
+            None,
+        )?);
+        for (n, v) in s.mail.cookies_for(&mail_url) {
+            http.add_cookie(&format!("{n}={v}; Path=/"));
+        }
+        *cur = Some((s.generation, host.to_owned(), Arc::clone(&http)));
+        Ok(http)
+    }
+
+    /// (진단용, owa-cli) 같은 회사 도메인의 다른 서버에 세션 쿠키를 실어 GET 한 번(리다이렉트는 따라가지 않는다).
+    /// (상태, Location, 형식, 본문 바이트). 허용 목록을 거치지 않으므로 앱에서는 쓰지 않는다.
+    pub async fn probe_get(&self, url: &str) -> Result<(u16, Option<String>, String, Vec<u8>)> {
+        let cfg = self.config()?;
+        let s = self.current()?;
+        let url = Url::parse(url)?;
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        if url.scheme() != "https" || !host.ends_with(&cfg.mail_host_suffix) {
+            return Err(Error::NotAllowed(url.to_string()));
+        }
+        let mail_url = Url::parse(&format!("{}://{}/", cfg.portal.scheme(), s.loc.host))?;
+        let root = Url::parse(&format!("https://{host}/"))?;
+        let http = Http::new(&root, &cfg.user_agent, cfg.timeout, false, None)?;
+        for (n, v) in s.mail.cookies_for(&mail_url) {
+            http.add_cookie(&format!("{n}={v}; Path=/"));
+        }
+        let path = url[url::Position::BeforePath..]
+            .trim_start_matches('/')
+            .to_owned();
+        let resp = http.send(Request::get(path)).await?;
+        Ok((
+            resp.status.as_u16(),
+            resp.header(LOCATION).map(str::to_owned),
+            resp.header(CONTENT_TYPE).unwrap_or_default().to_owned(),
+            resp.body.to_vec(),
+        ))
     }
 
     /// 목록 한 쪽(`start`는 1부터). `category`: 개인 폴더(`XML_Category`).
