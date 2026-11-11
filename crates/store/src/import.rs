@@ -177,12 +177,15 @@ impl Store {
         let stored = self.eml().put(raw)?;
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO messages(folder_id, server_item_id, change_key, server_state, internet_msg_id, \
-               conversation_id, subject, from_name, from_addr, to_list, cc_list, date_received, date_sent, \
-               size, has_attachments, is_read, flag, importance, is_draft, item_class, preview, eml_hash, \
-               indexed, origin) \
-             VALUES (?1, NULL, NULL, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, \
-               ?16, ?17, ?18, 0, ?19)",
+            &format!(
+                "INSERT INTO messages(id, folder_id, server_item_id, change_key, server_state, \
+                   internet_msg_id, conversation_id, subject, from_name, from_addr, to_list, cc_list, \
+                   date_received, date_sent, size, has_attachments, is_read, flag, importance, is_draft, \
+                   item_class, preview, eml_hash, indexed, origin) \
+                 VALUES ({}, ?1, NULL, NULL, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, \
+                   ?14, ?15, 0, ?16, ?17, ?18, 0, ?19)",
+                crate::schema::NEXT_MESSAGE_ID
+            ),
             params![
                 folder_id,
                 server_state::LOCAL_ONLY,

@@ -242,7 +242,37 @@ ALTER TABLE drafts ADD COLUMN excluded_orig TEXT;
 ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX ix_msg_folder_pin_date ON messages(folder_id, pinned DESC, date_received DESC);
 "#,
+    // 16: 메일·작성 중 메일 번호를 다시 쓰지 않는다(1.1.1 사용자 신고). `INTEGER PRIMARY KEY`는 맨 끝 행을 지우면 그
+    //     번호를 다음 행에 다시 준다: 복사본을 완전 삭제한 직후 들어온 메일이 지운 메일의 번호를 받아, 번호로 잇는
+    //     읽기 창 캐시·화면·대기 작업이 다른 메일 내용을 보였다. 지금까지 쓴 가장 큰 번호를 두고(작업 기록의
+    //     번호까지), 행을 넣을 때 그다음 번호를 쓴다. 트리거는 번호를 직접 주지 않는 앞 판 코드로 넣어도 기록을 올린다.
+    r#"
+CREATE TABLE id_seq (
+  name  TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
+);
+INSERT INTO id_seq(name, value) VALUES
+  ('messages', MAX(
+     (SELECT COALESCE(MAX(id), 0) FROM messages),
+     (SELECT COALESCE(MAX(message_id), 0) FROM ops),
+     (SELECT COALESCE(MAX(message_id), 0) FROM drafts),
+     (SELECT COALESCE(MAX(message_id), 0) FROM domino_ops))),
+  ('drafts', MAX(
+     (SELECT COALESCE(MAX(id), 0) FROM drafts),
+     (SELECT COALESCE(MAX(CAST(json_extract(payload, '$.draft') AS INTEGER)), 0) FROM ops)));
+CREATE TRIGGER id_seq_messages AFTER INSERT ON messages BEGIN
+  UPDATE id_seq SET value = MAX(value, NEW.id) WHERE name = 'messages';
+END;
+CREATE TRIGGER id_seq_drafts AFTER INSERT ON drafts BEGIN
+  UPDATE id_seq SET value = MAX(value, NEW.id) WHERE name = 'drafts';
+END;
+"#,
 ];
+
+/// 새 메일 행 번호(지운 번호를 다시 쓰지 않는다, 마이그레이션 16). `INSERT INTO messages(id, …)`의 값 자리에 쓴다.
+pub(crate) const NEXT_MESSAGE_ID: &str = "(SELECT value + 1 FROM id_seq WHERE name = 'messages')";
+/// 새 작성 중 메일 번호.
+pub(crate) const NEXT_DRAFT_ID: &str = "(SELECT value + 1 FROM id_seq WHERE name = 'drafts')";
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;

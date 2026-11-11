@@ -18,6 +18,7 @@ use serde_json::json;
 
 use crate::model::server_state;
 use crate::ops::{OP_DRAFT_SAVE, OP_SEND};
+use crate::schema::{NEXT_DRAFT_ID, NEXT_MESSAGE_ID};
 use crate::{Error, Result, Store};
 
 /// 작성 상태.
@@ -297,10 +298,12 @@ impl Store {
         let conn = self.conn();
         let o = &content.options;
         conn.execute(
-            "INSERT INTO drafts(kind, ref_message_id, to_json, cc_json, bcc_json, subject, body_html, \
-               include_quote, created_at, updated_at, importance, sensitivity, read_receipt, \
-               delivery_receipt, plain_text) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13, ?14)",
+            &format!(
+                "INSERT INTO drafts(id, kind, ref_message_id, to_json, cc_json, bcc_json, subject, \
+                   body_html, include_quote, created_at, updated_at, importance, sensitivity, \
+                   read_receipt, delivery_receipt, plain_text) \
+                 VALUES ({NEXT_DRAFT_ID}, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13, ?14)"
+            ),
             params![
                 kind,
                 ref_message_id,
@@ -422,10 +425,13 @@ impl Store {
                 }
                 None => {
                     tx.tx.execute(
-                        "INSERT INTO messages(folder_id, server_item_id, server_state, subject, from_name, \
-                           from_addr, to_list, cc_list, date_received, date_sent, size, has_attachments, \
-                           is_read, flag, importance, is_draft, item_class, preview) \
-                         VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, 0, ?12, 1, ?13, ?14)",
+                        &format!(
+                            "INSERT INTO messages(id, folder_id, server_item_id, server_state, subject, \
+                               from_name, from_addr, to_list, cc_list, date_received, date_sent, size, \
+                               has_attachments, is_read, flag, importance, is_draft, item_class, preview) \
+                             VALUES ({NEXT_MESSAGE_ID}, ?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
+                               ?11, 1, 0, ?12, 1, ?13, ?14)"
+                        ),
                         params![
                             folder,
                             server_state::PENDING,

@@ -841,11 +841,15 @@ impl Tx<'_> {
         p: &MessageProps,
     ) -> Result<i64> {
         self.tx.execute(
-            "INSERT INTO messages(folder_id, server_item_id, change_key, server_state, \
-               internet_msg_id, conversation_id, subject, from_name, from_addr, to_list, cc_list, \
-               date_received, date_sent, size, has_attachments, is_read, flag, importance, \
-               is_draft, item_class, preview, pinned) \
-             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+            &format!(
+                "INSERT INTO messages(id, folder_id, server_item_id, change_key, server_state, \
+                   internet_msg_id, conversation_id, subject, from_name, from_addr, to_list, cc_list, \
+                   date_received, date_sent, size, has_attachments, is_read, flag, importance, \
+                   is_draft, item_class, preview, pinned) \
+                 VALUES ({}, ?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+                   ?17, ?18, ?19, ?20, ?21)",
+                schema::NEXT_MESSAGE_ID
+            ),
             params![
                 folder_id,
                 server_item_id,
@@ -1304,6 +1308,61 @@ mod tests {
             [newest, new, old],
             "서버에서 풀림"
         );
+    }
+
+    /// 지운 메일·작성 중 메일 번호를 다시 쓰지 않는다(1.1.1 사용자 신고: 복사본을 완전 삭제한 직후 들어온 메일이
+    /// 같은 번호를 받아 다른 메일 내용이 보였다).
+    #[test]
+    fn deleted_ids_are_never_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        let (f, g, a, b) = s
+            .transaction(|tx| {
+                let f = tx.upsert_folder(&folder("INBOX", "ROOT", Some("IPF.Note")))?;
+                let g = tx.upsert_folder(&folder("TEMPLATES", "ROOT", Some("IPF.Note")))?;
+                let a = tx.insert_message(f, "A", None, &props("<a@x>", 1_000))?;
+                let b = tx.insert_message(f, "B", None, &props("<b@x>", 2_000))?;
+                Ok((f, g, a, b))
+            })
+            .unwrap();
+        // 맨 끝 메일을 다른 폴더로 복사한 뒤 사본을 완전 삭제(사용자가 한 그대로).
+        let t = s.copy_messages(&[b], g, 5, None).unwrap();
+        let copy = *t.folders[&g].iter().max().unwrap();
+        assert!(copy > b);
+        s.purge_messages(&[copy], 6, None).unwrap();
+        let c = s
+            .transaction(|tx| tx.insert_message(f, "C", None, &props("<c@x>", 3_000)))
+            .unwrap();
+        assert!(
+            c > copy,
+            "지운 번호 {copy}를 다시 쓰면 안 된다(새 번호 {c})"
+        );
+        assert_eq!(
+            s.message(c)
+                .unwrap()
+                .unwrap()
+                .props
+                .internet_msg_id
+                .as_deref(),
+            Some("<c@x>")
+        );
+        assert!(a < b);
+        // 작성 중 메일도.
+        let d1 = s
+            .create_draft("new", None, &DraftContent::default(), 1)
+            .unwrap();
+        s.delete_draft(d1).unwrap();
+        let d2 = s
+            .create_draft("new", None, &DraftContent::default(), 2)
+            .unwrap();
+        assert!(d2 > d1, "작성 중 메일 번호 {d1}을 다시 쓰면 안 된다");
+        // 다시 열어도(번호 기록은 DB에 있다).
+        drop(s);
+        let s = Store::open(dir.path()).unwrap();
+        let e = s
+            .transaction(|tx| tx.insert_message(f, "E", None, &props("<e@x>", 4_000)))
+            .unwrap();
+        assert!(e > c);
     }
 
     /// 전달에서 뺀 원본 첨부(1.1.0): 빼고 되돌리면 목록이 맞고, 서버에 다시 올릴 것으로 표시한다.
