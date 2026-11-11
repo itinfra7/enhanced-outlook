@@ -6,6 +6,7 @@
 pub mod backup;
 pub mod compose;
 pub mod domino;
+pub mod linked;
 mod render;
 
 pub use render::{

@@ -6,6 +6,7 @@ import type {
   Bootstrap,
   Cleanup,
   ListSort,
+  LinkedRefresh,
   DraftSave,
   DraftView,
   DupFound,
@@ -39,6 +40,7 @@ export const api = {
   openMessage: (id: number, allowRemote: boolean) =>
     invoke<Opened>('open_message', { id, allowRemote }),
   prefetch: (ids: number[]) => invoke<void>('prefetch', { ids }),
+  linkedRefresh: (id: number) => invoke<LinkedRefresh>('linked_refresh', { id }),
   openMessageWindow: (id: number) => invoke<void>('open_message_window', { id }),
   appStatus: () => invoke<Status>('app_status'),
   // 외부 이미지 허용: kind는 보낸 사람 주소('sender') 또는 도메인('domain'). 맞춘 값을 돌려준다.

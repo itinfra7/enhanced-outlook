@@ -20,6 +20,7 @@ mod dupes;
 mod files;
 mod folders;
 mod import;
+mod linked;
 mod memory;
 mod notify;
 mod redirects;
@@ -198,6 +199,7 @@ pub fn run() {
             commands::list_messages,
             commands::search,
             commands::open_message,
+            linked::linked_refresh,
             commands::prefetch,
             commands::allow_remote,
             commands::remove_remote_allow,

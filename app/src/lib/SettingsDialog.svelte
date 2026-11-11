@@ -39,6 +39,7 @@
       cleanup: { mode: 'off', days: 30, percent: 90 },
       unified: false,
       removeRedirects: false,
+      linkedDocs: false,
     },
     notify: 'arrived',
     sheetPaste: 'ask',
@@ -143,6 +144,7 @@
         draft.domino.enabled !== view.settings.domino.enabled ||
         draft.domino.unified !== view.settings.domino.unified ||
         draft.domino.removeRedirects !== view.settings.domino.removeRedirects ||
+        draft.domino.linkedDocs !== view.settings.domino.linkedDocs ||
         draft.notify !== view.settings.notify ||
         draft.sheetPaste !== view.settings.sheetPaste ||
         cleanupChanged ||
@@ -414,6 +416,15 @@
                 {/if}
               {/if}
             {/if}
+            <h4>연결문서 정보 가져오기</h4>
+            <label class="row radio" data-linked-docs>
+              <input type="checkbox" bind:checked={draft.domino.linkedDocs} />
+              알림 메일의 [연결문서] 내용을 메일 본문 아래에 붙이기
+            </label>
+            <p class="hint">
+              메일을 열 때마다 HCL Domino 로그인으로 최신 내용을 가져옵니다(단추는 빼고 원래 모양대로). 가져온 내용은
+              저장해 두어 오프라인일 때도 마지막으로 가져온 내용이 보입니다. 지금은 내부 DNS작업요청 문서를 지원합니다.
+            </p>
           {/if}
         </section>
       {:else}

@@ -10,6 +10,7 @@ mod dupes;
 mod eml;
 mod folder_ops;
 mod import;
+mod linked;
 mod local;
 mod model;
 mod ops;
@@ -33,6 +34,7 @@ pub use drafts::{
 pub use dupes::{DupProgress, DupRow, DupStage};
 pub use eml::{EmlStore, sha256_hex};
 pub use import::ImportOutcome;
+pub use linked::LinkedDoc;
 pub use local::Touched;
 pub use model::{
     AddressLists, BatchProgress, EmlTodo, FolderCounts, FolderRow, IndexTodo, MessageProps,

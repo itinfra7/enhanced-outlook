@@ -78,6 +78,23 @@ export interface MessageView {
   hasEml: boolean;
   /** 본문이 쓰는 인라인 이미지 수 */
   inlineImages: number;
+  /** HCL Domino 알림 메일의 연결문서(설정을 켰고 링크가 있을 때) */
+  linked: LinkedView | null;
+}
+
+export interface LinkedView {
+  /** 가져올 수 있는 업무 */
+  supported: boolean;
+  /** 저장해 둔 것을 가져온 때(유닉스 초) */
+  fetchedAt: number | null;
+}
+
+export interface LinkedRefresh {
+  /** 내용이 바뀌었다(메일을 다시 연다) */
+  changed: boolean;
+  fetchedAt: number | null;
+  /** 못 가져온 까닭 */
+  error: string | null;
 }
 
 export interface Opened {
@@ -401,6 +418,8 @@ export interface DominoSettings {
   unified: boolean;
   /** Outlook에서 리다이렉트되어 온 HCL Domino 사본을 서버·로컬에서 지운다(Outlook 메일은 그대로) */
   removeRedirects: boolean;
+  /** 알림 메일의 [연결문서] 내용을 본문 아래에 붙인다 */
+  linkedDocs: boolean;
 }
 
 /** 리다이렉트 사본 미리 보기 */

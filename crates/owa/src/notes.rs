@@ -126,6 +126,41 @@ pub fn allowed(post: bool, path: &str) -> bool {
     false
 }
 
+/// 연결문서(1.2.0) 요청 허용 목록(앱 서버 기준 상대 경로). 읽기만, 문서가 그리는 데 쓰는 것만:
+/// - `appl/{업무 DB}.nsf/0/{UNID}?opendocument`(업무 문서)
+/// - 스타일시트 `HTMLPUB/…/*.css`, `common/library.nsf/…/*.css`
+/// - 그림 `img/…`, `HTMLPUB/…`의 gif·png·jpg
+pub fn linked_allowed(path: &str) -> bool {
+    let safe = |s: &str| {
+        !s.is_empty()
+            && !s.contains("..")
+            && !s.contains("//")
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+    };
+    if let Some((db, rest)) = path
+        .strip_prefix("appl/")
+        .and_then(|p| p.split_once(".nsf/"))
+    {
+        let unid = rest
+            .strip_prefix("0/")
+            .and_then(|r| r.split_once('?'))
+            .filter(|(_, q)| q.eq_ignore_ascii_case("opendocument"))
+            .map(|(u, _)| u);
+        return valid_db(&format!("appl/{db}.nsf")) && unid.is_some_and(is_unid);
+    }
+    if !safe(path) {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    let css = lower.ends_with(".css");
+    let img = [".gif", ".png", ".jpg", ".jpeg"]
+        .iter()
+        .any(|e| lower.ends_with(e));
+    (css && (lower.starts_with("htmlpub/") || lower.starts_with("common/library.nsf/")))
+        || (img && (lower.starts_with("img/") || lower.starts_with("htmlpub/")))
+}
+
 fn element_param(p: &str) -> bool {
     matches!(
         p,
@@ -770,6 +805,35 @@ mod tests {
         }
         assert!(!allowed(true, &format!("{DB}/XML_Inbox?ReadViewEntries")));
         assert!(!allowed(false, "names.nsf?Login"), "로그인은 POST만");
+    }
+
+    #[test]
+    fn linked_allowlist_reads_document_and_assets_only() {
+        for p in [
+            "appl/applydomain.nsf/0/80694E2C4AD74C2049258EA7002AE276?opendocument",
+            "appl/applydomain.nsf/0/80694e2c4ad74c2049258ea7002ae276?OpenDocument",
+            "HTMLPUB/css/object.css",
+            "common/library.nsf/file/dhfw.fileview_large.css",
+            "img/app_li.gif",
+            "HTMLPUB/img/bu_pagetitle.gif",
+        ] {
+            assert!(linked_allowed(p), "열어야 함: {p}");
+        }
+        for p in [
+            "appl/applydomain.nsf/0/80694E2C4AD74C2049258EA7002AE276?editdocument",
+            "appl/applydomain.nsf/0/80694E2C4AD74C2049258EA7002AE276?opendocument&x=1",
+            "appl/applydomain.nsf/agent?OpenAgent",
+            "appl/../names.nsf/0/80694E2C4AD74C2049258EA7002AE276?opendocument",
+            "mail9/u1.nsf/0/80694E2C4AD74C2049258EA7002AE276?opendocument",
+            "HTMLPUB/js/a.js",
+            "HTMLPUB/css/a.css?x=1",
+            "HTMLPUB/../names.nsf/a.css",
+            "common/commonlib.nsf/fmSSORouting?openform",
+            "names.nsf?Logout",
+            "img/a.gif?OpenAgent",
+        ] {
+            assert!(!linked_allowed(p), "막아야 함: {p}");
+        }
     }
 
     #[test]
