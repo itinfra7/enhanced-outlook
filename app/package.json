@@ -3,7 +3,7 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "author": "itinfra7 (https://github.com/itinfra7)",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
