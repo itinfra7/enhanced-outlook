@@ -140,6 +140,14 @@ pub fn apply_cycle(
                         let relocate = (row.folder_id != fc.folder_id && !pinned)
                             .then_some((fc.folder_id, id.id.as_str()));
                         let p = guarded(&row, p, guard);
+                        // 초안은 내용이 바뀐다(웹메일에서 고침 등): 원문을 다시 받는다. 다른 메일은 변경 표시가
+                        // 읽음·플래그로도 바뀌어 원문은 그대로 둔다.
+                        if (p.is_draft || row.props.is_draft)
+                            && row.change_key.as_deref() != ck
+                            && let Some(h) = tx.invalidate_eml(row.id)?
+                        {
+                            stats.purged_hashes.push(h);
+                        }
                         tx.update_message(row.id, relocate, ck, &p)?;
                         stats.updated += 1;
                         stats.touch(row.folder_id, row.id);
@@ -393,6 +401,71 @@ mod tests {
                 .as_deref(),
             Some(&*format!("S{archive}"))
         );
+    }
+
+    #[test]
+    fn changed_draft_refetches_eml_but_mail_keeps_it() {
+        let (_d, store, inbox, _sent, _archive) = setup();
+        let with = |mut c: ItemChange, kind: ChangeKind, ck: &str, draft: bool| {
+            c.kind = kind;
+            c.item_id.as_mut().unwrap().change_key = Some(ck.into());
+            c.item.as_mut().unwrap().is_draft = Some(draft);
+            c
+        };
+        let draft = item("D", "<d@x>", "2026-10-15T10:00:00+09:00");
+        let mail = item("M", "<m@x>", "2026-10-15T11:00:00+09:00");
+        apply(
+            &store,
+            vec![fc(
+                inbox,
+                vec![
+                    with(draft.clone(), ChangeKind::Create, "ck1", true),
+                    with(mail.clone(), ChangeKind::Create, "ck1", false),
+                ],
+            )],
+        );
+        let rows = store.messages_in_folder(inbox).unwrap();
+        let id = |sid: &str| {
+            rows.iter()
+                .find(|m| m.server_item_id.as_deref() == Some(sid))
+                .unwrap()
+                .id
+        };
+        let (d, m) = (id("D"), id("M"));
+        assert!(store.attach_eml(d, "D", b"old-draft").unwrap());
+        assert!(store.attach_eml(m, "M", b"mail").unwrap());
+
+        // 같은 변경 표시: 그대로.
+        apply(
+            &store,
+            vec![fc(
+                inbox,
+                vec![with(draft.clone(), ChangeKind::Update, "ck1", true)],
+            )],
+        );
+        assert!(store.message(d).unwrap().unwrap().eml_hash.is_some());
+
+        // 웹메일에서 초안을 고침, 메일은 읽음·플래그로 변경 표시만 바뀜.
+        let s = apply(
+            &store,
+            vec![fc(
+                inbox,
+                vec![
+                    with(draft, ChangeKind::Update, "ck2", true),
+                    with(mail, ChangeKind::Update, "ck2", false),
+                ],
+            )],
+        );
+        assert!(store.message(d).unwrap().unwrap().eml_hash.is_none());
+        assert!(store.message(m).unwrap().unwrap().eml_hash.is_some());
+        assert_eq!(s.purged_hashes, [eo_store::sha256_hex(b"old-draft")]);
+        let todo: Vec<i64> = store
+            .eml_todo(10)
+            .unwrap()
+            .iter()
+            .map(|t| t.message_id)
+            .collect();
+        assert_eq!(todo, [d]);
     }
 
     #[test]

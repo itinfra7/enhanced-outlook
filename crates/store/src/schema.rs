@@ -277,6 +277,12 @@ CREATE TABLE linked_docs (
   fetched_at INTEGER NOT NULL
 );
 "#,
+    // 18: 서버 초안의 원문을 한 번 다시 받는다(1.2.1 사용자 신고). 1.2.0까지는 초안을 고쳐 서버에 저장하거나 웹메일에서
+    //     고쳐도 처음 받은 원문을 그대로 두어, 임시 보관함 메일을 템플릿 등에 복사하면 옛 내용이 복사됐다.
+    //     원문 없는 서버 메일은 다음 원문 받기가 서버의 지금 내용으로 받는다.
+    r#"
+UPDATE messages SET eml_hash = NULL WHERE is_draft = 1 AND server_item_id IS NOT NULL;
+"#,
 ];
 
 /// 새 메일 행 번호(지운 번호를 다시 쓰지 않는다, 마이그레이션 16). `INSERT INTO messages(id, …)`의 값 자리에 쓴다.

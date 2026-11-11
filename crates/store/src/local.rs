@@ -135,6 +135,25 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// 원문을 떼어 다음 원문 받기에서 서버의 지금 내용으로 다시 받게 한다(내용이 바뀌는 초안, 1.2.1). 뗀 원문의
+    /// 해시(쓰는 행이 없으면 호출한 쪽이 파일을 지운다).
+    pub fn invalidate_eml(&self, id: i64) -> Result<Option<String>> {
+        let old: Option<String> = self
+            .tx
+            .query_row("SELECT eml_hash FROM messages WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .flatten();
+        if old.is_some() {
+            self.tx.execute(
+                "UPDATE messages SET eml_hash = NULL WHERE id = ?1 AND server_item_id IS NOT NULL",
+                [id],
+            )?;
+        }
+        Ok(old.filter(|_| self.tx.changes() > 0))
+    }
+
     /// 사본 행(원문 공유). 서버 ID는 없고 `state`(보류 또는 보관)로 만든다.
     pub fn insert_copy(
         &self,
