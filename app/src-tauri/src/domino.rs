@@ -734,12 +734,15 @@ struct CleanupRunner {
     /// 용량 기준으로 지난번에 지운 것: (지우기 전 사용량, 지운 크기).
     last_quota: Option<(i64, i64)>,
     stopped: bool,
+    /// 받은 메일만으로는 기준 아래가 되지 않아 지우지 않음을 로그에 남겼다(바뀔 때만 다시 남긴다).
+    warned: bool,
 }
 
 static CLEANUP: Mutex<CleanupRunner> = Mutex::new(CleanupRunner {
     last: None,
     last_quota: None,
     stopped: false,
+    warned: false,
 });
 
 /// 설정이 바뀌면 다음 확인에 바로 다시 본다(멈춤도 푼다).
@@ -791,7 +794,23 @@ async fn maybe_cleanup(app: &AppHandle, inbox: &[ListedMail]) {
         ids,
         bytes,
         without_eml,
+        unreachable,
     } = pick(&rows, &c, now_ms(), used.zip(limit), CLEANUP_MAX);
+    {
+        let mut r = lock(&CLEANUP);
+        match unreachable {
+            Some((need, deletable)) if !r.warned => {
+                r.warned = true;
+                applog::warn(format!(
+                    "HCL Domino 자동 정리 안 함: {:.1}MB 줄여야 하는데 지울 수 있는 받은 메일은 {:.1}MB뿐(지운 메일·보낸 메일 등 다른 메일함이 큼)",
+                    need as f64 / 1_048_576.0,
+                    deletable as f64 / 1_048_576.0
+                ));
+            }
+            Some(_) => {}
+            None => r.warned = false,
+        }
+    }
     if ids.is_empty() {
         return;
     }

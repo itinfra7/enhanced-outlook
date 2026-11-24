@@ -30,6 +30,9 @@ pub struct Picked {
     pub bytes: i64,
     /// 기준에 맞지만 원문이 없어 남긴 메일 수.
     pub without_eml: usize,
+    /// 용량 기준: 지울 수 있는 받은 편지함 메일을 모두 지워도 n% 아래가 되지 않아 아무것도 고르지 않았다(1.2.3).
+    /// 그때 줄여야 하는 크기, 지울 수 있는 크기.
+    pub unreachable: Option<(i64, i64)>,
 }
 
 /// 받은 편지함 메일(`(ID, 크기, 원문 있음, 받은 시각 ms)`, 오래된 것부터)에서 지울 것을 고른다.
@@ -68,6 +71,14 @@ pub fn pick(
             }
             // n% 아래가 될 만큼.
             let need = used - goal + 1;
+            // 사용량에는 받은 편지함 밖(지운 편지함·보낸 편지함 등)도 들어간다. 받은 편지함만 지워서 n% 아래가 되지
+            // 않으면 지우지 않는다(1.2.3 사용자 신고: HCL Domino 지운 메일에 192MB가 차 있는 동안 받은 메일을 30분마다
+            // 오래된 것부터 모두 지웠다).
+            let deletable: i64 = rows.iter().filter(|r| r.2).map(|r| r.1).sum();
+            if deletable < need {
+                p.unreachable = Some((need, deletable));
+                return p;
+            }
             for &(id, size, has_eml, _) in rows {
                 if p.bytes >= need || p.ids.len() >= max {
                     break;
@@ -117,6 +128,8 @@ struct Runner {
     last_quota: Option<(i64, i64)>,
     /// 지운 만큼 사용량이 줄지 않아 멈춤(설정을 다시 저장하면 풀린다).
     stopped: bool,
+    /// 받은 편지함만으로는 기준 아래가 되지 않아 지우지 않음을 로그에 남겼다.
+    warned: bool,
 }
 
 static RUNNER: Mutex<Runner> = Mutex::new(Runner {
@@ -124,6 +137,7 @@ static RUNNER: Mutex<Runner> = Mutex::new(Runner {
     last: None,
     last_quota: None,
     stopped: false,
+    warned: false,
 });
 
 /// 설정이 바뀌면 다음 주기에 바로 다시 본다(멈춤도 푼다).
@@ -132,6 +146,7 @@ pub fn reset() {
     r.last = None;
     r.last_quota = None;
     r.stopped = false;
+    r.warned = false;
 }
 
 /// 동기화 주기가 끝날 때 부른다. 때가 되었으면 뒤에서 정리한다.
@@ -189,6 +204,21 @@ async fn run(app: &AppHandle, c: Cleanup) {
     let done = tauri::async_runtime::spawn_blocking(move || {
         let st = app2.state::<AppState>();
         let p = targets(&st, &c, MAX_PER_RUN)?;
+        {
+            let mut r = lock(&RUNNER);
+            match p.unreachable {
+                Some((need, deletable)) if !r.warned => {
+                    r.warned = true;
+                    applog::warn(format!(
+                        "자동 정리 안 함: {} 줄여야 하는데 지울 수 있는 받은 편지함 메일은 {}뿐(다른 폴더가 큼)",
+                        mb(need),
+                        mb(deletable)
+                    ));
+                }
+                Some(_) => {}
+                None => r.warned = false,
+            }
+        }
         if p.ids.is_empty() {
             return Ok::<_, String>(None);
         }
@@ -281,6 +311,30 @@ mod tests {
             .ids
             .is_empty()
         );
+    }
+
+    /// 받은 편지함을 모두 지워도 n% 아래가 되지 않으면(다른 메일함이 큼) 아무것도 지우지 않는다.
+    #[test]
+    fn quota_does_nothing_when_inbox_alone_cannot_reach_goal() {
+        // 한도 1000, 50% = 500. 사용량 700(받은 편지함은 150뿐, 지울 수 있는 것 130) → 201 줄여야 함.
+        let p = pick(
+            &rows(),
+            &c(CleanupMode::Quota, 30, 50),
+            NOW,
+            Some((700, 1000)),
+            1000,
+        );
+        assert!(p.ids.is_empty());
+        assert_eq!(p.unreachable, Some((201, 130)));
+        // 지울 수 있는 것으로 닿으면 평소대로.
+        let p = pick(
+            &rows(),
+            &c(CleanupMode::Quota, 30, 50),
+            NOW,
+            Some((600, 1000)),
+            1000,
+        );
+        assert_eq!((p.ids, p.unreachable), (vec![1, 3, 4, 5], None));
     }
 
     #[test]
