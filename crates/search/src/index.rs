@@ -223,8 +223,24 @@ impl SearchIndex {
         Ok(w)
     }
 
+    /// 쓰기 객체를 버린다(다음 쓰기 때 새로 만든다). 1.2.2 사용자 신고: 색인 파일 쓰기가 한 번 실패하면(Windows
+    /// "액세스가 거부되었습니다", 백신 등이 새 파일을 잡음) tantivy 0.26은 그 오류를 다음 commit에서 한 번 돌려주고
+    /// 색인 스레드를 다시 띄우지 않는다. 그 뒤로는 넣기·commit이 모두 성공하는데 문서는 버려져, 앱을 다시 켤 때까지
+    /// 새 메일이 검색되지 않았다. 오류가 나면 쓰기 객체를 통째로 새로 만든다.
+    pub fn reset_writer(&self) {
+        *lock(&self.writer) = None;
+    }
+
     /// 넣거나 바꾼다(같은 ID는 지우고 다시 넣음). 보이려면 [`SearchIndex::commit`].
     pub fn add(&self, docs: &[MailDoc]) -> Result<()> {
+        let r = self.add_inner(docs);
+        if r.is_err() {
+            self.reset_writer();
+        }
+        r
+    }
+
+    fn add_inner(&self, docs: &[MailDoc]) -> Result<()> {
         let f = &self.fields;
         let mut guard = self.writer()?;
         let w = guard
@@ -265,11 +281,27 @@ impl SearchIndex {
 
     /// 쌓인 변경을 확정하고 바로 검색에 보이게 한다.
     pub fn commit(&self) -> Result<()> {
-        if let Some(w) = lock(&self.writer).as_mut() {
-            w.commit()?;
+        {
+            let mut w = lock(&self.writer);
+            if let Some(writer) = w.as_mut()
+                && let Err(e) = writer.commit()
+            {
+                // 확정하지 못한 변경은 버려진다: 부른 쪽이 완료로 표시하지 않아 다음에 다시 넣는다.
+                *w = None;
+                return Err(e.into());
+            }
         }
         self.reader.reload()?;
         Ok(())
+    }
+
+    /// 이 메일이 검색에 보이는가(확정 뒤 실제로 들어갔는지 확인용).
+    pub fn contains(&self, id: u64) -> Result<bool> {
+        let q = TermQuery::new(
+            Term::from_field_u64(self.fields.id, id),
+            IndexRecordOption::Basic,
+        );
+        Ok(self.reader.searcher().search(&q, &Count)? > 0)
     }
 
     pub fn num_docs(&self) -> u64 {
@@ -439,6 +471,102 @@ mod tests {
         let mut v = ix.search(q, &SearchOptions::default()).unwrap().ids;
         v.sort_unstable();
         v
+    }
+
+    /// 새 파일을 한 번 쓰지 못하는 저장소(Windows "액세스가 거부되었습니다" 재현).
+    #[derive(Clone)]
+    struct Flaky {
+        inner: tantivy::directory::RamDirectory,
+        fail: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl std::fmt::Debug for Flaky {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("Flaky")
+        }
+    }
+
+    impl tantivy::Directory for Flaky {
+        fn get_file_handle(
+            &self,
+            path: &Path,
+        ) -> std::result::Result<
+            std::sync::Arc<dyn tantivy::directory::FileHandle>,
+            tantivy::directory::error::OpenReadError,
+        > {
+            self.inner.get_file_handle(path)
+        }
+        fn delete(
+            &self,
+            path: &Path,
+        ) -> std::result::Result<(), tantivy::directory::error::DeleteError> {
+            self.inner.delete(path)
+        }
+        fn exists(
+            &self,
+            path: &Path,
+        ) -> std::result::Result<bool, tantivy::directory::error::OpenReadError> {
+            self.inner.exists(path)
+        }
+        fn open_write(
+            &self,
+            path: &Path,
+        ) -> std::result::Result<
+            tantivy::directory::WritePtr,
+            tantivy::directory::error::OpenWriteError,
+        > {
+            let seg = path.extension().is_some_and(|e| e == "term");
+            if seg && self.fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(tantivy::directory::error::OpenWriteError::IoError {
+                    io_error: std::sync::Arc::new(std::io::Error::from(
+                        std::io::ErrorKind::PermissionDenied,
+                    )),
+                    filepath: path.to_owned(),
+                });
+            }
+            self.inner.open_write(path)
+        }
+        fn atomic_read(
+            &self,
+            path: &Path,
+        ) -> std::result::Result<Vec<u8>, tantivy::directory::error::OpenReadError> {
+            self.inner.atomic_read(path)
+        }
+        fn atomic_write(&self, path: &Path, data: &[u8]) -> std::io::Result<()> {
+            self.inner.atomic_write(path, data)
+        }
+        fn sync_directory(&self) -> std::io::Result<()> {
+            self.inner.sync_directory()
+        }
+        fn watch(
+            &self,
+            cb: tantivy::directory::WatchCallback,
+        ) -> tantivy::Result<tantivy::directory::WatchHandle> {
+            self.inner.watch(cb)
+        }
+    }
+
+    /// 1.2.2 사용자 신고: 색인 파일 쓰기가 한 번 실패하면 그 뒤로 넣은 메일이 앱을 다시 켤 때까지 검색되지 않았다.
+    #[test]
+    fn writer_recovers_after_failed_segment_write() {
+        let fail = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dir = Flaky {
+            inner: tantivy::directory::RamDirectory::create(),
+            fail: fail.clone(),
+        };
+        let ix = SearchIndex::with_index(Index::create(dir, schema(), Default::default()).unwrap())
+            .unwrap();
+        ix.add(&[doc(1, 10, 1_000, "첫째 보고서", "본문")]).unwrap();
+        ix.commit().unwrap();
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        ix.add(&[doc(2, 10, 2_000, "둘째 보고서", "본문")]).unwrap();
+        assert!(ix.commit().is_err(), "쓰기 실패는 한 번 알린다");
+        assert!(!ix.contains(2).unwrap());
+        // 전에는 여기서부터 넣기·확정이 성공하는데 문서가 버려졌다.
+        ix.add(&[doc(3, 10, 3_000, "셋째 보고서", "본문")]).unwrap();
+        ix.commit().unwrap();
+        assert!(ix.contains(3).unwrap(), "실패 뒤에 넣은 메일도 검색된다");
+        assert_eq!(ids(&ix, "보고서"), [1, 3]);
     }
 
     /// 형식 표시가 맞아도 열 수 없는 색인(다른 tantivy 판 등)은 비우고 새로 만든다(exe만 바꾼 업그레이드).

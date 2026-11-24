@@ -49,7 +49,9 @@ pub fn after_local(app: &AppHandle, t: &Touched) {
         for id in &t.removed {
             let _ = st.search.delete(*id as u64);
         }
-        let _ = st.search.commit();
+        if let Err(e) = st.search.commit() {
+            crate::applog::warn(format!("색인에서 지우기 실패: {e}"));
+        }
     }
     for (folder_id, ids) in &t.folders {
         let _ = app.emit(
@@ -64,7 +66,11 @@ pub fn after_local(app: &AppHandle, t: &Touched) {
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let st = handle.state::<AppState>();
-        let _ = eo_sync::index_pending(&st.store, &st.search, None);
+        match eo_sync::index_pending(&st.store, &st.search, None) {
+            Ok(r) if r.recovered > 0 => crate::applog::warn("색인 쓰기를 다시 만들어 넣음"),
+            Ok(_) => {}
+            Err(e) => crate::applog::warn(format!("색인 실패: {e}")),
+        }
     });
     if t.queued > 0 {
         let handle = app.clone();

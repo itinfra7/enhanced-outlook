@@ -18,6 +18,8 @@ pub struct IndexReport {
     pub indexed: usize,
     /// 원문을 해석하지 못해 목록 속성만 색인한 수.
     pub parse_failed: usize,
+    /// 확정했는데 들어가지 않아 쓰기 객체를 새로 만들어 다시 넣은 묶음 수(1.2.2).
+    pub recovered: usize,
     pub elapsed: Duration,
 }
 
@@ -131,6 +133,21 @@ pub fn index_pending(
         // 색인을 먼저 확정하고 표시한다(중간에 끊기면 다음에 다시 색인, 같은 ID는 덮어씀).
         search.add(&docs)?;
         search.commit()?;
+        // 확정이 성공해도 문서가 버려질 수 있다(tantivy 색인 스레드가 죽은 채, `SearchIndex::reset_writer`).
+        // 들어간 것을 확인하고서야 완료로 표시한다. 안 들어갔으면 쓰기 객체를 새로 만들어 한 번 더.
+        if !docs.iter().all(|d| search.contains(d.id).unwrap_or(false)) {
+            search.reset_writer();
+            search.add(&docs)?;
+            search.commit()?;
+            if !docs.iter().all(|d| search.contains(d.id).unwrap_or(false)) {
+                search.reset_writer();
+                return Err(eo_search::Error::Query(
+                    "색인에 넣은 메일이 검색에 보이지 않습니다".into(),
+                )
+                .into());
+            }
+            report.recovered += 1;
+        }
         store.mark_indexed(&marks)?;
         report.indexed += todo.len();
     }

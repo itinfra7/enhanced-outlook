@@ -629,8 +629,10 @@ async fn cycle(app: &AppHandle, full: bool, cancel: &AtomicBool) -> Result<(), e
             eo_sync::index_pending(&st.store, &st.search, None)
         })
         .await;
-        if let Ok(Err(e)) = indexed {
-            applog::warn(format!("HCL Domino 메일 색인 실패: {e}"));
+        match indexed {
+            Ok(Err(e)) => applog::warn(format!("HCL Domino 메일 색인 실패: {e}")),
+            Ok(Ok(r)) if r.recovered > 0 => applog::warn("색인 쓰기를 다시 만들어 넣음"),
+            _ => {}
         }
         bump_list_gen();
         let _ = app.emit("folders-changed", ());
